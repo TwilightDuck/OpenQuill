@@ -121,23 +121,23 @@ struct TextTarget {
 
     static func textValue(_ element: AXUIElement) -> String? {
         guard attribute(element, kAXSubroleAttribute) as? String != kAXSecureTextFieldSubrole else { return nil }
-        if let value = attribute(element, kAXValueAttribute) as? String, !value.isEmpty { return value }
+        let fallback = attribute(element, kAXValueAttribute) as? String
         let role = attribute(element, kAXRoleAttribute) as? String
         guard [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role ?? ""),
               let count = attribute(element, kAXNumberOfCharactersAttribute) as? Int, count >= 0, count <= 100_000 else {
-            return attribute(element, kAXValueAttribute) as? String
+            return fallback
         }
-        if count == 0 { return "" }
+        if count == 0 { return fallback ?? "" }
         var range = CFRange(location: 0, length: count)
-        guard let parameter = AXValueCreate(.cfRange, &range) else { return nil }
+        guard let parameter = AXValueCreate(.cfRange, &range) else { return fallback }
         for name in [kAXStringForRangeParameterizedAttribute, kAXAttributedStringForRangeParameterizedAttribute] {
             var result: CFTypeRef?
             if AXUIElementCopyParameterizedAttributeValue(element, name as CFString, parameter, &result) == .success {
-                if let string = result as? String { return string }
-                if let string = result as? NSAttributedString { return string.string }
+                let string = (result as? String) ?? (result as? NSAttributedString)?.string
+                if let string, string.utf16.count == count { return string }
             }
         }
-        return nil
+        return fallback
     }
 
     var stillFocused: Bool {

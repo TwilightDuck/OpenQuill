@@ -86,6 +86,7 @@ struct SetupGuide: View {
         state.leavePractice(); state.notice = nil
         step = destination; state.practiceActive = destination == 4
         if destination == 3 { state.refreshInputDevices() }
+        if destination == 4 { state.practiceLanguage = state.preferences.language }
     }
     private func heading(_ title: String, _ subtitle: String) -> some View {
         VStack(spacing: 10) {
@@ -175,6 +176,9 @@ struct SetupGuide: View {
                 }.pickerStyle(.menu).disabled(state.modelBusy)
                     .onChange(of: state.preferences.model) { _, _ in Task { await state.loadModel(download: false, showError: false) } }
                 Text(state.preferences.model.detail).font(.system(size: 12)).foregroundStyle(Color.flowSecondary)
+                Text(state.preferences.model.languageCoverage).font(.system(size: 12, weight: .medium)).foregroundStyle(Color.flowAccent)
+                Text("Parakeet covers 25 languages. Whisper opens the full 100-language catalog.")
+                    .font(.system(size: 11)).foregroundStyle(Color.flowSecondary).multilineTextAlignment(.center)
                 if state.modelReady {
                     Label("Installed and running locally", systemImage: "checkmark.circle.fill").foregroundStyle(Color.flowAccent)
                 } else if state.modelBusy {
@@ -182,9 +186,6 @@ struct SetupGuide: View {
                     else { ProgressView().controlSize(.small) }
                     Text(state.modelStatus).font(.system(size: 12)).foregroundStyle(Color.flowSecondary)
                     Text("You can continue while preparation finishes.").font(.system(size: 11)).foregroundStyle(Color.flowSecondary)
-                } else {
-                    Text("Recommended: Parakeet Ultra for everyday English and Dutch dictation.")
-                        .font(.system(size: 11)).foregroundStyle(Color.flowSecondary).multilineTextAlignment(.center)
                 }
             }.padding(24).frame(maxWidth: 520).background(Color.flowSurface, in: RoundedRectangle(cornerRadius: 16))
                 .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.flowSeparator))
@@ -211,6 +212,12 @@ struct SetupGuide: View {
             heading("Start and stop, your way.", "Press once to speak. Press again to finish. Escape cancels.")
             VStack(alignment: .leading, spacing: 16) {
                 Toggle("Use the middle mouse button", isOn: $state.preferences.middleMouse)
+                LabeledContent("Dictation language") {
+                    SpeechLanguagePicker(title: "Dictation language", selection: $state.preferences.language, model: state.preferences.model)
+                }
+                if !state.preferences.model.supports(state.preferences.language) {
+                    Button("Choose Whisper for \(SpeechLanguages.name(state.preferences.language))") { move(to: 2) }.buttonStyle(.borderless)
+                }
                 Picker("Input device", selection: Binding(get: { state.preferences.inputDeviceUID ?? "" }, set: { state.preferences.inputDeviceUID = $0.isEmpty ? nil : $0 })) {
                     Text("Automatic · \(state.systemInputName ?? "system input")").tag("")
                     ForEach(state.inputDevices) { item in Text(item.name).tag(item.id) }
@@ -231,10 +238,9 @@ struct SetupGuide: View {
     private var practice: some View {
         VStack(spacing: 20) {
             heading("Try it here first.", "A scratch space just for you. No messages sent. No history saved.")
-            if state.modelReady && state.microphoneStatus == "Allowed" && state.inputDeviceAvailable {
-                Picker("Practice language", selection: $state.practiceLanguage) {
-                    Text("English").tag("en"); Text("Nederlands").tag("nl")
-                }.pickerStyle(.segmented).labelsHidden().frame(width: 230).disabled(state.phase != .idle)
+            SpeechLanguagePicker(title: "Practice language", selection: $state.practiceLanguage, model: state.preferences.model)
+                .buttonStyle(.bordered).disabled(state.phase != .idle)
+            if state.modelReady && state.microphoneStatus == "Allowed" && state.inputDeviceAvailable && state.preferences.model.supports(state.practiceLanguage) {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
                         Label(state.phase == .idle ? "Your practice space" : state.phase.title, systemImage: "waveform")
@@ -247,7 +253,7 @@ struct SetupGuide: View {
                             .focused($scratchFocused).accessibilityLabel("Practice text, never sent or saved")
                     }.frame(height: 115)
                     Divider()
-                    Text(state.practiceLanguage == "nl" ? "Probeer: “Ik bel je morgen terug.”" : "Try: “Meet me at the station at nine.”")
+                    Text(practicePrompt)
                         .font(.system(size: 11)).foregroundStyle(Color.flowSecondary)
                 }.padding(20).frame(maxWidth: 520).background(Color.flowRaised, in: RoundedRectangle(cornerRadius: 16))
                     .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.flowSeparator))
@@ -257,7 +263,7 @@ struct SetupGuide: View {
                     if state.phase != .idle { Button("Cancel", action: state.cancel).disabled(state.phase == .inserting) }
                     if state.practiceFinished { Label("That’s your voice, typed locally.", systemImage: "checkmark.circle").font(.system(size: 12)).foregroundStyle(Color.flowAccent) }
                 }
-                Text("You can also use middle-click or ⌥ Space. Practice text disappears when you leave.")
+                Text("\(state.preferences.middleMouse ? "You can also use middle-click or ⌥ Space." : "You can also use ⌥ Space.") Practice text disappears when you leave.")
                     .font(.system(size: 11)).foregroundStyle(Color.flowSecondary)
             } else {
                 VStack(spacing: 16) {
@@ -265,13 +271,25 @@ struct SetupGuide: View {
                     summary("Microphone: \(state.microphoneStatus)", ready: state.microphoneStatus == "Allowed")
                     summary(state.inputDeviceName, ready: state.inputDeviceAvailable)
                     summary(state.modelStatus, ready: state.modelReady)
+                    if !state.preferences.model.supports(state.practiceLanguage) {
+                        Text("\(SpeechLanguages.name(state.practiceLanguage)) requires a Whisper model.").font(.callout).foregroundStyle(Color.flowSecondary)
+                    }
                     if state.modelBusy { ProgressView().controlSize(.small); if state.progress > 0 { ProgressView(value: state.progress) } }
                     if state.microphoneStatus != "Allowed" { Button("Set up microphone access") { move(to: 1) }.buttonStyle(.bordered) }
                     if !state.inputDeviceAvailable { Button("Choose microphone") { move(to: 3) }.buttonStyle(.bordered) }
-                    if !state.modelReady { Button(state.modelBusy ? "View model preparation" : "Set up speech model") { move(to: 2) }.buttonStyle(.bordered) }
+                    if !state.modelReady || !state.preferences.model.supports(state.practiceLanguage) { Button(state.modelBusy ? "View model preparation" : "Set up speech model") { move(to: 2) }.buttonStyle(.bordered) }
                     Text("You can finish now and try dictation later.").font(.system(size: 12)).foregroundStyle(Color.flowSecondary)
                 }.padding(32).frame(maxWidth: 520).background(Color.flowSurface, in: RoundedRectangle(cornerRadius: 16))
             }
+        }
+    }
+
+    private var practicePrompt: String {
+        switch state.practiceLanguage {
+        case "nl": "Probeer: “Ik bel je morgen terug.”"
+        case "en": "Try: “Meet me at the station at nine.”"
+        case "auto": "Say a short sentence in any language supported by your model."
+        default: "Say a short sentence in \(SpeechLanguages.name(state.practiceLanguage))."
         }
     }
 

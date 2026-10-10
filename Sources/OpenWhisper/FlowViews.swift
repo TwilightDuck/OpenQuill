@@ -79,24 +79,31 @@ struct DictateView: View {
                     Label(state.modelReady ? "Local model ready" : (state.modelBusy ? "Preparing local model…" : "Setup needed"), systemImage: state.modelReady ? "checkmark.circle.fill" : "arrow.down.circle")
                         .font(.callout).foregroundStyle(state.modelReady ? Color.flowAccent : Color.secondary)
                     Spacer()
-                    Picker("Language", selection: $state.preferences.language) { languageOptions }
-                        .labelsHidden().frame(width: 145).disabled(state.phase != .idle)
+                    SpeechLanguagePicker(title: "Dictation language", selection: $state.preferences.language, model: state.preferences.model)
+                        .buttonStyle(.bordered).disabled(state.phase != .idle)
                 }
                 VStack(spacing: 18) {
                     Image(systemName: "waveform").font(.system(size: 46, weight: .light)).foregroundStyle(Color.flowAccent).accessibilityHidden(true)
                     Text(state.phase == .idle ? "Speak your mind." : state.phase.title).font(.system(size: 34, weight: .semibold, design: .rounded)).tracking(-0.8)
-                    Text(state.phase == .recording ? "\(Int(state.elapsed))s of \(state.recordingLimitLabel) · click again to finish" : "Click your middle mouse button. Speak. Click again.")
+                    Text(state.phase == .recording ? "\(Int(state.elapsed))s of \(state.recordingLimitLabel) · press again to finish" : (state.preferences.middleMouse ? "Middle-click. Speak. Click again." : "Press ⌥Space. Speak. Press again."))
                         .font(.body).foregroundStyle(.secondary)
                     HStack(spacing: 12) {
-                        Label("Middle mouse", systemImage: "computermouse").padding(.horizontal, 12).padding(.vertical, 8).background(.quaternary, in: Capsule())
-                        Text("or ⌥Space").foregroundStyle(.secondary)
+                        if state.preferences.middleMouse {
+                            HStack(spacing: 8) { MouseShortcutSymbol(size: 26); Text("Middle-click") }
+                                .padding(.horizontal, 12).padding(.vertical, 8).background(.quaternary, in: Capsule())
+                            Text("or").foregroundStyle(.secondary)
+                        }
+                        Text("⌥ Space").padding(.horizontal, 12).padding(.vertical, 8).background(.quaternary, in: Capsule())
                     }.font(.callout)
                     if state.phase == .processing || state.phase == .starting || state.phase == .cancelling { ProgressView().controlSize(.small) }
                     if state.phase == .recording {
                         ProgressView(value: Double(state.level)).tint(Color.flowAccent).frame(width: 220)
                         if let remaining = state.silenceRemaining, remaining < 4.5 { Text("Finishing after silence in \(Int(ceil(remaining)))s").font(.caption).foregroundStyle(.secondary) }
                     }
-                    if !state.modelReady { Button("Set up dictation", action: openSettings).buttonStyle(.borderedProminent) }
+                    if !state.preferences.model.supports(state.preferences.language) {
+                        Text("\(SpeechLanguages.name(state.preferences.language)) requires a Whisper model.").font(.callout).foregroundStyle(.secondary)
+                    }
+                    if !state.modelReady || !state.preferences.model.supports(state.preferences.language) { Button("Set up dictation", action: openSettings).buttonStyle(.borderedProminent) }
                     if state.phase != .idle && state.phase != .inserting { Button("Cancel", action: state.cancel).keyboardShortcut(.cancelAction) }
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 38)
@@ -138,12 +145,6 @@ struct DictateView: View {
     }
 }
 
-@ViewBuilder var languageOptions: some View {
-    Text("English").tag("en")
-    Text("Dutch / Flemish").tag("nl")
-    Text("Detect language").tag("auto")
-}
-
 struct HistoryView: View {
     @Bindable var state: AppState
     @State private var editing: Dictation?
@@ -163,7 +164,7 @@ struct HistoryView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             Text(record.appName).font(.headline)
-                            Text(record.language.uppercased()).font(.caption).foregroundStyle(.secondary)
+                            Text(SpeechLanguages.name(record.language)).font(.caption).foregroundStyle(.secondary)
                             Spacer()
                             Text(record.date, format: .dateTime.month(.abbreviated).day().hour().minute()).font(.caption).foregroundStyle(.secondary)
                         }
@@ -284,7 +285,7 @@ struct VocabularyView: View {
                         Toggle("Use \(rule.from) correction", isOn: Binding(get: { rule.enabled }, set: { state.setRule(rule.id, enabled: $0) })).labelsHidden().toggleStyle(.switch).controlSize(.small)
                         VStack(alignment: .leading, spacing: 6) {
                             Text("\(rule.from) → \(rule.to)").font(.headline).textSelection(.enabled)
-                            Text("\(rule.bundleID == "*" ? "All apps" : (state.preferences.apps.first { $0.bundleID == rule.bundleID }?.name ?? rule.bundleID)) · \(rule.language == "*" ? "All languages" : rule.language.uppercased()) · \(rule.observations == 0 ? "Taught by you" : "Observed \(rule.observations)×")")
+                            Text("\(rule.bundleID == "*" ? "All apps" : (state.preferences.apps.first { $0.bundleID == rule.bundleID }?.name ?? rule.bundleID)) · \(SpeechLanguages.name(rule.language)) · \(rule.observations == 0 ? "Taught by you" : "Observed \(rule.observations)×")")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
@@ -300,7 +301,7 @@ struct VocabularyView: View {
                 Text("Enter what the model writes and the spelling you want. This rule applies immediately across apps.").font(.callout).foregroundStyle(.secondary)
                 TextField("Heard as", text: $heard).textFieldStyle(.roundedBorder)
                 TextField("Write as", text: $spelling).textFieldStyle(.roundedBorder)
-                Picker("Language", selection: $language) { Text("All languages").tag("*"); Text("English").tag("en"); Text("Dutch / Flemish").tag("nl") }
+                LabeledContent("Language") { SpeechLanguagePicker(title: "Spelling rule language", selection: $language, special: "*") }
                 if invalid { Text("Use two different names or short phrases, up to 128 characters each.").font(.caption).foregroundStyle(.red) }
                 HStack { Spacer(); Button("Cancel") { teaching = false }; Button("Save spelling") {
                     if state.teachName(from: heard, to: spelling, language: language) { heard = ""; spelling = ""; invalid = false; teaching = false }
@@ -330,7 +331,7 @@ struct SpeechProfileView: View {
                     ForEach(profile.languages, id: \.name) { item in
                         VStack(spacing: 8) {
                             HStack {
-                                Text(item.name == "en" ? "English" : item.name == "nl" ? "Dutch / Flemish" : item.name.uppercased())
+                                Text(SpeechLanguages.name(item.name))
                                 Spacer()
                                 Text("\(item.words.formatted()) words · \(profile.words > 0 ? Int(Double(item.words) / Double(profile.words) * 100) : 0)%").foregroundStyle(.secondary)
                             }.font(.callout)
@@ -351,7 +352,7 @@ struct SpeechProfileView: View {
                         }
                         Text("For clearer phrasing, try a brief pause where you would normally use a filler. These phrases can also be useful in natural conversation.").font(.callout).foregroundStyle(.secondary)
                     }
-                    Text("Speech models may remove fillers. These counts describe saved text; they are not a grammar, pronunciation or fluency score.").font(.caption).foregroundStyle(.secondary)
+                    Text("Filler phrase analysis currently covers English and Dutch. Speech models may remove fillers. These counts describe saved text; they are not a grammar, pronunciation or fluency score.").font(.caption).foregroundStyle(.secondary)
                 }.flowCard()
                 Text("Language totals follow the selected or detected dictation language. Pace includes pauses and uses transcript word counts. This profile excludes imported audio and follows retained history; deleting history changes these statistics. No audio recordings or voiceprints are stored.").font(.caption).foregroundStyle(.secondary)
             }.padding(30)
@@ -398,6 +399,10 @@ struct FlowSettingsView: View {
                 Picker("Model", selection: $state.preferences.model) { ForEach(SpeechModel.allCases) { Text($0.title).tag($0) } }.disabled(state.modelBusy || state.phase != .idle)
                     .onChange(of: state.preferences.model) { _, _ in Task { await state.loadModel(download: false) } }
                 Text(state.preferences.model.detail).font(.callout).foregroundStyle(.secondary)
+                Text(state.preferences.model.languageCoverage).font(.caption).foregroundStyle(Color.flowAccent)
+                if !state.preferences.model.supports(state.preferences.language) {
+                    Text("Choose Whisper for \(SpeechLanguages.name(state.preferences.language)), then download or load its model.").font(.callout).foregroundStyle(.orange)
+                }
                 Text(state.modelStatus).font(.callout)
                 if state.modelBusy { ProgressView(); if state.progress > 0 { ProgressView(value: state.progress) } }
                 HStack {
@@ -423,9 +428,9 @@ struct FlowSettingsView: View {
                 LabeledContent("Keyboard fallback", value: "⌥Space")
                 LabeledContent("Middle mouse access", value: state.mouseAvailable ? "Available" : "Allow Accessibility, then refresh")
                 if let error = state.hotkeyError { Text(error).foregroundStyle(.orange) }
-                Picker("Default language", selection: $state.preferences.language) { languageOptions }
+                LabeledContent("Default language") { SpeechLanguagePicker(title: "Default language", selection: $state.preferences.language, model: state.preferences.model) }.disabled(state.phase != .idle)
                 Toggle("Recognize spoken punctuation commands", isOn: $state.preferences.spokenPunctuation)
-                Text("For example: “new paragraph” or “nieuwe alinea”. Model punctuation is always preserved. Esc cancels.").font(.caption).foregroundStyle(.secondary)
+                Text("Commands currently cover English and Dutch: “new paragraph” or “nieuwe alinea”. Model punctuation is preserved in every language. Esc cancels.").font(.caption).foregroundStyle(.secondary)
                 Picker("Maximum recording", selection: Binding(get: { state.recordingLimitMinutes }, set: { state.preferences.recordingLimitMinutes = $0 })) {
                     ForEach(1...30, id: \.self) { minutes in Text(minutes == 1 ? "1 minute" : "\(minutes) minutes").tag(minutes) }
                 }.disabled(state.phase != .idle)
@@ -464,7 +469,7 @@ struct FlowSettingsView: View {
                     ForEach($state.preferences.apps) { $app in
                         VStack(alignment: .leading, spacing: 10) {
                             Text(app.name).font(.headline)
-                            Picker("Language", selection: $app.language) { Text("Use default").tag("default"); languageOptions }
+                            LabeledContent("Language") { SpeechLanguagePicker(title: "Language for \(app.name)", selection: $app.language, model: state.preferences.model, special: "default") }.disabled(state.phase != .idle)
                             Picker("Spoken punctuation commands", selection: $app.spokenPunctuation) {
                                 Text("Use default").tag(Optional<Bool>.none)
                                 Text("Enabled").tag(Optional.some(true))

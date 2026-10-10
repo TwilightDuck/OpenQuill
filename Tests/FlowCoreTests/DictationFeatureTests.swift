@@ -65,6 +65,8 @@ import FlowCore
     let result = TextProcessing.clean("Hallo Éline komma stuur dit naar acmey nieuwe alinea Tot morgen!", corrections: rules, bundleID: "notes", language: "nl", spokenPunctuation: true)
     #expect(result == "Hallo Éline, stuur dit naar Acme $1\n\nTot morgen!")
     #expect(TextProcessing.clean("We discussed a new line of products.", corrections: [], bundleID: "mail", language: "en", spokenPunctuation: false) == "We discussed a new line of products.")
+    #expect(TextProcessing.clean("La commande s’appelle new line.", corrections: [], bundleID: "mail", language: "fr", spokenPunctuation: true) == "La commande s’appelle new line.")
+    #expect(TextProcessing.clean("new line という名前です。", corrections: [], bundleID: "mail", language: "ja", spokenPunctuation: true) == "new line という名前です。")
 }
 
 @Test func taughtNamesApplyAcrossAppsAndOverrideOlderAutomaticGuesses() throws {

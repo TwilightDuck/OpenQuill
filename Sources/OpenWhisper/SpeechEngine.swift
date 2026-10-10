@@ -90,7 +90,8 @@ actor SpeechEngine {
     }
 
     func transcribe(_ samples: [Float], language: String, vocabulary: String = "") async throws -> SpeechOutput {
-        guard loaded != nil else { throw FlowError.message("Load a speech model in Settings first.") }
+        guard let loaded else { throw FlowError.message("Load a speech model in Settings first.") }
+        guard loaded.supports(language) else { throw FlowError.message("\(loaded.title) doesn’t support \(SpeechLanguages.name(language)). Choose Whisper in Settings for this language.") }
         guard samples.count >= 8000 else { throw FlowError.message("The recording was too short. Try speaking for at least half a second.") }
         let started = Date()
         let text: String
@@ -101,7 +102,7 @@ actor SpeechEngine {
             text = result.text
             let recognizer = NLLanguageRecognizer()
             recognizer.processString(text)
-            detected = recognizer.dominantLanguage?.rawValue ?? (language == "auto" ? "en" : language)
+            detected = language == "auto" ? SpeechLanguages.detectedCode(recognizer.dominantLanguage?.rawValue) : language
         } else if let whisper {
             let prompt = vocabulary.isEmpty ? nil : whisper.tokenizer?.encode(text: String(vocabulary.prefix(500))).suffix(120).map { $0 }
             let options = DecodingOptions(language: language == "auto" ? nil : language, temperatureFallbackCount: 2,
@@ -109,7 +110,7 @@ actor SpeechEngine {
                 promptTokens: prompt, concurrentWorkerCount: 1, chunkingStrategy: .vad)
             let results = try await whisper.transcribe(audioArray: samples, decodeOptions: options)
             text = results.map(\.text).joined(separator: " ")
-            detected = results.first?.language ?? language
+            detected = language == "auto" ? SpeechLanguages.detectedCode(results.first?.language) : language
         } else { throw FlowError.message("The model is unavailable.") }
         return SpeechOutput(text: text.trimmingCharacters(in: .whitespacesAndNewlines), language: detected,
             audioSeconds: Double(samples.count) / 16000, processingSeconds: Date().timeIntervalSince(started))

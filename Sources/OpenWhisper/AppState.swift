@@ -124,7 +124,7 @@ final class AppState {
         catch { data = FlowData(); storeReadable = false; notice = "History could not be read. Your original file is preserved: \(error.localizedDescription)" }
         let existingModel = SpeechEngine.path(for: preferences.model).map { FileManager.default.fileExists(atPath: $0.path) } ?? false
         showSetup = preferences.setupStatus == nil && savedPreferences == nil && data.dictations.isEmpty && !existingModel && !accessibility && microphoneStatus != "Allowed"
-        practiceLanguage = preferences.language == "nl" ? "nl" : "en"
+        practiceLanguage = preferences.language
         triggers.middleEnabled = preferences.middleMouse
         triggers.onToggle = { [weak self] in self?.toggle() }
         triggers.onCancel = { [weak self] in self?.cancel() }
@@ -153,7 +153,7 @@ final class AppState {
     }
     var profile: SpeechProfile { SpeechProfile(records: data.dictations) }
     var inputDeviceAvailable: Bool { preferences.inputDeviceUID.map { uid in inputDevices.contains { $0.id == uid } } ?? (systemInputName != nil) }
-    var readyToDictate: Bool { modelReady && microphoneStatus == "Allowed" && accessibility && inputDeviceAvailable }
+    var readyToDictate: Bool { modelReady && preferences.model.supports(preferences.language) && microphoneStatus == "Allowed" && accessibility && inputDeviceAvailable }
     var inputDeviceName: String {
         guard let uid = preferences.inputDeviceUID else { return systemInputName.map { "Automatic · \($0)" } ?? "No system input available" }
         return inputDevices.first(where: { $0.id == uid })?.name ?? "Selected microphone unavailable"
@@ -177,6 +177,7 @@ final class AppState {
         guard phase == .idle else { return }
         finishWatch(); notice = nil; refreshPermissions(); refreshInputDevices()
         practiceText = ""; practiceFinished = false; practiceActive = false
+        practiceLanguage = preferences.language
         showSetup = true; showWindow()
     }
     func closeSetup(skipped: Bool) {
@@ -254,6 +255,10 @@ final class AppState {
         }
         let app = preferences.apps.first { $0.bundleID == target?.bundleID }
         recordingLanguage = practice ? practiceLanguage : (app?.language == "default" || app == nil ? preferences.language : app!.language)
+        guard preferences.model.supports(recordingLanguage) else {
+            notice = "\(SpeechLanguages.name(recordingLanguage)) requires Whisper. Choose a Whisper model in Settings; download it once to use this language offline."
+            showWindow(); return
+        }
         recordingPunctuation = app?.spokenPunctuation ?? preferences.spokenPunctuation
         recordingPressEnter = !practice && (app?.pressEnterAfterDictation ?? false)
         recordingMaximumSeconds = Double(recordingLimitMinutes) * 60
@@ -291,7 +296,7 @@ final class AppState {
         let punctuation = recordingPunctuation
         let pressEnter = recordingPressEnter
         let practice = recordingPractice
-        let hints = data.corrections.filter { $0.enabled && ($0.bundleID == "*" || $0.bundleID == target?.bundleID) && ($0.language == "*" || $0.language == language || language == "auto") }.map(\.to)
+        let hints = data.corrections.filter { $0.enabled && ($0.bundleID == "*" || $0.bundleID == target?.bundleID) && ($0.language == "*" || $0.language == language) }.map(\.to)
         let vocabulary = ([preferences.vocabulary] + hints).joined(separator: ", ")
         run = Task {
             defer { phase = .idle; panel.hide() }
@@ -319,7 +324,7 @@ final class AppState {
                     data.dictations.insert(record, at: 0)
                     data.dictations = Array(data.dictations.prefix(1000)); persist()
                 }
-                if let anchor = delivery.anchor, preferences.learnCorrections {
+                if let anchor = delivery.anchor, preferences.learnCorrections, actualLanguage != "unknown" {
                     watch = EditWatch(anchor: anchor, recordID: record.id, language: actualLanguage, expires: Date().addingTimeInterval(60))
                 }
                 if delivery.anchor == nil {
@@ -407,7 +412,7 @@ final class AppState {
         guard let index = data.dictations.firstIndex(where: { $0.id == id }) else { return }
         let record = data.dictations[index]
         data.dictations[index].corrected = text
-        if preferences.learnCorrections { data.learn(original: record.text, edited: text, bundleID: record.bundleID, language: record.language) }
+        if preferences.learnCorrections, record.language != "unknown" { data.learn(original: record.text, edited: text, bundleID: record.bundleID, language: record.language) }
         persist()
     }
     func clearHistory() { data.dictations = []; persist() }

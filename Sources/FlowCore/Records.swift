@@ -106,7 +106,7 @@ public enum TextProcessing {
 
     public static func clean(_ raw: String, corrections: [Correction], bundleID: String, language: String, spokenPunctuation: Bool) -> String {
         var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if spokenPunctuation {
+        if spokenPunctuation && ["en", "nl"].contains(language) {
             let commands = language == "nl"
                 ? [("nieuwe alinea", "\n\n"), ("nieuwe regel", "\n"), ("vraagteken", "?"), ("uitroepteken", "!"), ("puntkomma", ";"), ("dubbele punt", ":"), ("komma", ",")]
                 : [("new paragraph", "\n\n"), ("new line", "\n"), ("question mark", "?"), ("exclamation mark", "!"), ("semicolon", ";"), ("full stop", "."), ("comma", ",")]
