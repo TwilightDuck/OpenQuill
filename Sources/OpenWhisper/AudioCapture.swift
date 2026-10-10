@@ -1,25 +1,54 @@
 @preconcurrency import AVFoundation
 import Foundation
 import FlowCore
+import CoreMedia
 
-/// The audio tap is the sole owner of the converter. The lock protects samples read by the UI.
-private final class AudioSink: @unchecked Sendable {
+struct AudioInputDevice: Identifiable {
+    let id: String
+    let name: String
+    static var systemInputName: String? { AVCaptureDevice.default(for: .audio)?.localizedName }
+
+    static func available() -> [AudioInputDevice] {
+        captureDevices.map { AudioInputDevice(id: $0.uniqueID, name: $0.localizedName) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    static var captureDevices: [AVCaptureDevice] {
+        AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone], mediaType: .audio, position: .unspecified).devices
+    }
+}
+
+/// The serial capture delegate owns conversion; the lock protects samples read by the UI.
+private final class AudioSink: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let lock = NSLock()
-    private let converter: AVAudioConverter
+    private var converter: AVAudioConverter?
     private let format: AVAudioFormat
     private var samples: [Float] = []
     private var energy: Float = 0
     private var failure: String?
     private var activity: RecordingActivity
-    init(input: AVAudioFormat, maximumSeconds: Double, thresholdDB: Double) throws {
+    init(maximumSeconds: Double, thresholdDB: Double) throws {
         activity = RecordingActivity(maximumSeconds: maximumSeconds, thresholdDB: thresholdDB)
-        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false),
-              let converter = AVAudioConverter(from: input, to: format) else {
-            throw FlowError.message("This microphone’s audio format is unsupported.")
-        }
-        self.format = format; self.converter = converter
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false) else { throw FlowError.message("Could not prepare microphone audio.") }
+        self.format = format
+        super.init()
     }
-    func append(_ buffer: AVAudioPCMBuffer) {
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard let description = CMSampleBufferGetFormatDescription(sampleBuffer) else { fail("This microphone’s audio format is unsupported."); return }
+        let inputFormat = AVAudioFormat(cmAudioFormatDescription: description)
+        let frames = CMSampleBufferGetNumSamples(sampleBuffer)
+        guard frames > 0, frames <= Int(Int32.max),
+              let buffer = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: AVAudioFrameCount(frames)) else { return }
+        buffer.frameLength = AVAudioFrameCount(frames)
+        guard CMSampleBufferCopyPCMDataIntoAudioBufferList(sampleBuffer, at: 0, frameCount: Int32(frames), into: buffer.mutableAudioBufferList) == noErr else { fail("Could not read microphone audio."); return }
+        append(buffer)
+    }
+    private func fail(_ message: String) {
+        lock.lock(); failure = message; lock.unlock()
+    }
+    private func append(_ buffer: AVAudioPCMBuffer) {
+        if converter?.inputFormat != buffer.format { converter = AVAudioConverter(from: buffer.format, to: format) }
+        guard let converter else { fail("This microphone’s audio format is unsupported."); return }
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * 16000 / buffer.format.sampleRate + 64)
         guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
         var supplied = false
@@ -54,24 +83,29 @@ private final class AudioSink: @unchecked Sendable {
 
 @MainActor
 final class AudioCapture {
-    private var engine: AVAudioEngine?
+    private var session: AVCaptureSession?
     private var sink: AudioSink?
+    private let audioQueue = DispatchQueue(label: "OpenWhisper.microphone")
     var status: (level: Float, activity: RecordingActivity) { sink?.status() ?? (0, RecordingActivity()) }
-    func start(maximumSeconds: Double, thresholdDB: Double) throws {
-        let engine = AVAudioEngine()
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else { throw FlowError.message("No microphone is available. Check your input device in System Settings.") }
-        let sink = try AudioSink(input: format, maximumSeconds: maximumSeconds, thresholdDB: thresholdDB)
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in sink.append(buffer) }
-        do { try engine.start() } catch { input.removeTap(onBus: 0); throw error }
-        self.engine = engine; self.sink = sink
+    func start(maximumSeconds: Double, thresholdDB: Double, deviceUID: String? = nil) throws {
+        let device = deviceUID.flatMap { uid in AudioInputDevice.captureDevices.first { $0.uniqueID == uid } } ?? (deviceUID == nil ? AVCaptureDevice.default(for: .audio) : nil)
+        guard let device else { throw FlowError.message("Your microphone is unavailable. Choose another input device or Automatic in Settings.") }
+        let input = try AVCaptureDeviceInput(device: device)
+        let session = AVCaptureSession()
+        let output = AVCaptureAudioDataOutput()
+        let sink = try AudioSink(maximumSeconds: maximumSeconds, thresholdDB: thresholdDB)
+        guard session.canAddInput(input), session.canAddOutput(output) else { throw FlowError.message("Could not use \(device.localizedName). Choose another input device in Settings.") }
+        session.addInput(input); session.addOutput(output)
+        output.setSampleBufferDelegate(sink, queue: audioQueue)
+        session.startRunning()
+        guard session.isRunning else { throw FlowError.message("Could not start \(device.localizedName). Check your microphone in Settings.") }
+        self.session = session; self.sink = sink
     }
     func stop() throws -> [Float] {
-        engine?.inputNode.removeTap(onBus: 0)
-        engine?.stop(); engine = nil
-        let result = sink?.snapshot(); sink = nil
+        session?.stopRunning(); session = nil
+        let result = audioQueue.sync { sink?.snapshot() }; sink = nil
         if let error = result?.error { throw FlowError.message(error) }
+        if result?.samples.isEmpty == true { throw FlowError.message("No audio arrived from the microphone. Check the selected input; a MacBook’s built-in microphone needs its lid open.") }
         return result?.samples ?? []
     }
     func cancel() { _ = try? stop() }

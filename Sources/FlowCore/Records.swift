@@ -77,20 +77,31 @@ public enum TextProcessing {
     /// A readable editor may expose text but omit its caret. Confirm the complete
     /// insertion without guessing that caret or accepting a partial text change.
     public static func isExactInsertion(before: String, after: String, inserted: String) -> Bool {
+        insertionContext(before: before, after: after, inserted: inserted, requireUnique: false) != nil
+    }
+
+    /// A learning anchor needs one unambiguous inserted span, even when the editor
+    /// exposes its text but not its caret. Enter confirmation only needs a complete insertion.
+    public static func insertionContext(before: String, after: String, inserted: String, requireUnique: Bool = true) -> (prefix: String, suffix: String)? {
         let afterCount = after.utf16.count
         let beforeCount = before.utf16.count
-        guard !inserted.isEmpty, afterCount >= beforeCount, afterCount - beforeCount == inserted.utf16.count else { return false }
+        guard !inserted.isEmpty, afterCount >= beforeCount, afterCount - beforeCount == inserted.utf16.count else { return nil }
         let value = after as NSString
         var search = NSRange(location: 0, length: value.length)
-        // ponytail: cap repeated-text candidates; ambiguous fields safely skip Enter.
+        var candidate: (prefix: String, suffix: String)?
+        // ponytail: cap repeated-text candidates; ambiguous fields safely skip learning.
         for _ in 0..<100 {
             let match = value.range(of: inserted, options: .literal, range: search)
-            guard match.location != NSNotFound else { return false }
-            if value.replacingCharacters(in: match, with: "") == before { return true }
+            guard match.location != NSNotFound else { return candidate }
+            if value.replacingCharacters(in: match, with: "") == before {
+                guard candidate == nil else { return nil }
+                candidate = (value.substring(to: match.location), value.substring(from: NSMaxRange(match)))
+                if !requireUnique { return candidate }
+            }
             let next = match.location + 1
             search = NSRange(location: next, length: value.length - next)
         }
-        return false
+        return nil
     }
 
     public static func clean(_ raw: String, corrections: [Correction], bundleID: String, language: String, spokenPunctuation: Bool) -> String {

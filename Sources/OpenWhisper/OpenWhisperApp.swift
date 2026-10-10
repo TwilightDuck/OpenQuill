@@ -53,6 +53,9 @@ struct OpenWhisperApplication: App {
             CommandGroup(after: .appInfo) {
                 Button("Transcribe audio file…", action: state.transcribeFile).disabled(!state.modelReady || state.phase != .idle)
             }
+            CommandGroup(replacing: .help) {
+                Button("Show Setup Guide…", action: state.openSetup).disabled(state.phase != .idle)
+            }
         }
         MenuBarExtra {
             FlowMenu(state: state)

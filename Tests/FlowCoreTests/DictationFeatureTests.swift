@@ -44,6 +44,20 @@ import FlowCore
     for _ in 0..<2 { data.learn(original: "Mail Acmey today.", edited: "Mail Acme today.", bundleID: "mail", language: "en") }
     data.learn(original: "Mail Acmey today.", edited: "Mail Canon today.", bundleID: "mail", language: "en")
     #expect(data.corrections.allSatisfy { !$0.enabled })
+    // An editor can expose text without a caret: infer only one complete inserted span.
+    let context = TextProcessing.insertionContext(before: prefix + suffix, after: prefix + "Stuur dit naar Acmey morgen." + suffix, inserted: "Stuur dit naar Acmey morgen.")
+    #expect(context?.prefix == prefix && context?.suffix == suffix)
+    if let context, let edit = TextProcessing.editedSpan(value: prefix + "Stuur dit naar Acme morgen." + suffix, prefix: context.prefix, suffix: context.suffix) {
+        var external = FlowData()
+        external.learn(original: "Stuur dit naar Acmey morgen.", edited: edit, bundleID: "external-editor", language: "nl")
+        #expect(external.corrections.first?.from == "Acmey")
+        #expect(external.corrections.first?.to == "Acme")
+        #expect(external.corrections.first?.enabled == false)
+        external.learn(original: "Stuur dit naar Acmey morgen.", edited: edit, bundleID: "external-editor", language: "nl")
+        #expect(TextProcessing.clean("Bel Acmey vandaag.", corrections: external.corrections, bundleID: "external-editor", language: "nl", spokenPunctuation: false) == "Bel Acme vandaag.")
+    } else { Issue.record("The external field's corrected span was not recovered") }
+    #expect(TextProcessing.insertionContext(before: "ha", after: "haha", inserted: "ha") == nil)
+    #expect(TextProcessing.insertionContext(before: prefix + suffix, after: "Changed outside " + "Stuur dit naar Acmey morgen." + suffix, inserted: "Stuur dit naar Acmey morgen.") == nil)
 }
 
 @Test func dutchSpokenPunctuationAndCorrectionsPreserveUnicodeAndLiteralVocabulary() {

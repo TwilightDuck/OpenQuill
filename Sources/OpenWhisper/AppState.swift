@@ -29,6 +29,8 @@ struct Preferences: Codable {
     var quietThresholdDB: Double?
     var dialect: String?
     var recordingLimitMinutes: Int?
+    var inputDeviceUID: String?
+    var setupStatus: String?
 }
 
 enum DictationPhase: Equatable {
@@ -61,6 +63,11 @@ final class AppState {
     var modelBusy = false
     var progress: Double = 0
     var notice: String?
+    var showSetup = false
+    var practiceActive = false
+    var practiceText = ""
+    var practiceLanguage = "en"
+    var practiceFinished = false
     var currentApp = "No text field selected"
     var level: Float = 0
     var elapsed: Double = 0
@@ -72,6 +79,8 @@ final class AppState {
     var historySearch = ""
     var hotkeyError: String?
     var microphoneStatus = AppState.describeMicrophone()
+    var inputDevices = AudioInputDevice.available()
+    var systemInputName = AudioInputDevice.systemInputName
     private static func describeMicrophone() -> String {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: "Allowed"
@@ -94,6 +103,9 @@ final class AppState {
     private var recordingLanguage = "en"
     private var recordingPunctuation = false
     private var recordingPressEnter = false
+    private var recordingInputDeviceUID: String?
+    private var recordingPractice = false
+    private var recordingStarted = Date()
     private var watch: EditWatch?
 
     struct EditWatch {
@@ -106,9 +118,13 @@ final class AppState {
     }
 
     init() {
-        preferences = UserDefaults.standard.data(forKey: "preferences").flatMap { try? JSONDecoder().decode(Preferences.self, from: $0) } ?? Preferences()
+        let savedPreferences = UserDefaults.standard.data(forKey: "preferences")
+        preferences = savedPreferences.flatMap { try? JSONDecoder().decode(Preferences.self, from: $0) } ?? Preferences()
         do { data = try store.load() }
         catch { data = FlowData(); storeReadable = false; notice = "History could not be read. Your original file is preserved: \(error.localizedDescription)" }
+        let existingModel = SpeechEngine.path(for: preferences.model).map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        showSetup = preferences.setupStatus == nil && savedPreferences == nil && data.dictations.isEmpty && !existingModel && !accessibility && microphoneStatus != "Allowed"
+        practiceLanguage = preferences.language == "nl" ? "nl" : "en"
         triggers.middleEnabled = preferences.middleMouse
         triggers.onToggle = { [weak self] in self?.toggle() }
         triggers.onCancel = { [weak self] in self?.cancel() }
@@ -136,6 +152,12 @@ final class AppState {
         return minutes == 1 ? "1 minute" : "\(minutes) minutes"
     }
     var profile: SpeechProfile { SpeechProfile(records: data.dictations) }
+    var inputDeviceAvailable: Bool { preferences.inputDeviceUID.map { uid in inputDevices.contains { $0.id == uid } } ?? (systemInputName != nil) }
+    var readyToDictate: Bool { modelReady && microphoneStatus == "Allowed" && accessibility && inputDeviceAvailable }
+    var inputDeviceName: String {
+        guard let uid = preferences.inputDeviceUID else { return systemInputName.map { "Automatic · \($0)" } ?? "No system input available" }
+        return inputDevices.first(where: { $0.id == uid })?.name ?? "Selected microphone unavailable"
+    }
     var personalTerms: [String] {
         let terms = preferences.vocabulary.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         return Array(Set(terms + data.corrections.filter(\.enabled).map(\.to))).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
@@ -145,6 +167,28 @@ final class AppState {
         accessibility = AXIsProcessTrusted()
         microphoneStatus = Self.describeMicrophone()
         triggers.register(); mouseAvailable = triggers.mouseAvailable
+    }
+
+    func refreshInputDevices() {
+        inputDevices = AudioInputDevice.available(); systemInputName = AudioInputDevice.systemInputName
+    }
+
+    func openSetup() {
+        guard phase == .idle else { return }
+        finishWatch(); notice = nil; refreshPermissions(); refreshInputDevices()
+        practiceText = ""; practiceFinished = false; practiceActive = false
+        showSetup = true; showWindow()
+    }
+    func closeSetup(skipped: Bool) {
+        guard phase != .inserting else { return }
+        if phase != .idle { cancel() }
+        practiceActive = false; practiceText = ""; practiceFinished = false
+        preferences.setupStatus = skipped ? "skipped" : "complete"
+        showSetup = false
+    }
+    func leavePractice() {
+        if recordingPractice && phase != .idle { cancel() }
+        practiceActive = false; practiceText = ""; practiceFinished = false
     }
 
     func requestAccessibility() {
@@ -168,6 +212,9 @@ final class AppState {
             notice = allowed ? "Microphone access is allowed." : "Allow Open Whisper under System Settings → Privacy & Security → Microphone."
         }
     }
+    func openMicrophoneSettings() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
+    }
 
     func loadModel(download: Bool, showError: Bool = true) async {
         guard !modelBusy, phase == .idle else { return }
@@ -189,10 +236,15 @@ final class AppState {
     func toggle() {
         if phase == .recording { finish(); return }
         guard phase == .idle else { return }
+        if showSetup && !practiceActive { return }
+        let practice = showSetup && practiceActive
+        notice = nil
         guard modelReady, !modelBusy else { notice = "Open Settings and download or load a speech model first."; showWindow(); return }
-        guard AXIsProcessTrusted() else { notice = "Allow Accessibility in Settings before dictating into other apps."; showWindow(); return }
+        guard practice || AXIsProcessTrusted() else { notice = "Allow Accessibility in Settings before dictating into other apps."; showWindow(); return }
         finishWatch()
-        target = TextTarget.capture()
+        target = practice ? nil : TextTarget.capture()
+        recordingPractice = practice
+        if practice { currentApp = "Practice" }
         guard target?.secure != true else { notice = "Dictation is disabled in password fields."; return }
         if let target {
             currentApp = target.appName
@@ -201,10 +253,11 @@ final class AppState {
             }
         }
         let app = preferences.apps.first { $0.bundleID == target?.bundleID }
-        recordingLanguage = app?.language == "default" || app == nil ? preferences.language : app!.language
+        recordingLanguage = practice ? practiceLanguage : (app?.language == "default" || app == nil ? preferences.language : app!.language)
         recordingPunctuation = app?.spokenPunctuation ?? preferences.spokenPunctuation
-        recordingPressEnter = app?.pressEnterAfterDictation ?? false
+        recordingPressEnter = !practice && (app?.pressEnterAfterDictation ?? false)
         recordingMaximumSeconds = Double(recordingLimitMinutes) * 60
+        recordingInputDeviceUID = preferences.inputDeviceUID
         phase = .starting
         let session = UUID(); generation = session
         run = Task { [self] in
@@ -214,7 +267,7 @@ final class AppState {
             // On first permission prompt the user may have selected another app.
             guard target == nil || target?.stillFocused == true else { phase = .idle; notice = "Select your text field and click the middle button again."; return }
             do {
-                try capture.start(maximumSeconds: recordingMaximumSeconds, thresholdDB: preferences.quietThresholdDB ?? -42); phase = .recording; elapsed = 0
+                try capture.start(maximumSeconds: recordingMaximumSeconds, thresholdDB: preferences.quietThresholdDB ?? -42, deviceUID: recordingInputDeviceUID); phase = .recording; recordingStarted = Date(); elapsed = 0
                 level = 0; silenceRemaining = nil
                 panel.show(title: "Listening", detail: currentApp, maximumSeconds: recordingMaximumSeconds, middleMouse: preferences.middleMouse, screen: target?.screen)
                 let meterTimer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
@@ -237,6 +290,7 @@ final class AppState {
         let language = recordingLanguage
         let punctuation = recordingPunctuation
         let pressEnter = recordingPressEnter
+        let practice = recordingPractice
         let hints = data.corrections.filter { $0.enabled && ($0.bundleID == "*" || $0.bundleID == target?.bundleID) && ($0.language == "*" || $0.language == language || language == "auto") }.map(\.to)
         let vocabulary = ([preferences.vocabulary] + hints).joined(separator: ", ")
         run = Task {
@@ -248,6 +302,11 @@ final class AppState {
                 let actualLanguage = language == "auto" ? result.language : language
                 let cleaned = TextProcessing.clean(result.text, corrections: data.corrections,
                     bundleID: target?.bundleID ?? "", language: actualLanguage, spokenPunctuation: punctuation)
+                if practice {
+                    guard showSetup, practiceActive else { return }
+                    practiceText = cleaned; practiceFinished = true
+                    return
+                }
                 lastText = cleaned
                 // Insertion is a commit boundary; Esc cancels decoding, not an already delivered edit.
                 phase = .inserting
@@ -263,7 +322,12 @@ final class AppState {
                 if let anchor = delivery.anchor, preferences.learnCorrections {
                     watch = EditWatch(anchor: anchor, recordID: record.id, language: actualLanguage, expires: Date().addingTimeInterval(60))
                 }
-                if delivery.anchor == nil { notice = "\(delivery.status). Your transcript is available on the Dictate screen." }
+                if delivery.anchor == nil {
+                    if delivery.status.hasPrefix("Inserted"), delivery.status.contains("Enter pressed") { notice = nil }
+                    else if delivery.status.contains("unverified") {
+                        notice = "Couldn’t confirm the text in \(target?.appName ?? "this field"). Correction tracking is off for this dictation. Your transcript is available below."
+                    } else { notice = "\(delivery.status). Your transcript is available on the Dictate screen." }
+                }
             } catch {
                 if generation == session { notice = error.localizedDescription }
             }
@@ -282,12 +346,12 @@ final class AppState {
         let status = capture.status
         // Fast attack, gentle release; the input itself is sampled by the audio tap.
         level += (status.level - level) * (status.level > level ? 0.8 : 0.3)
-        elapsed = status.activity.seconds
+        elapsed = max(status.activity.seconds, Date().timeIntervalSince(recordingStarted))
         let enabled = preferences.autoStopSilence ?? false
         let delay = preferences.silenceDelay ?? 5
         silenceRemaining = enabled ? status.activity.silenceSeconds.map { max(0, delay - $0) } : nil
         panel.update(level: level, elapsed: elapsed, remaining: silenceRemaining)
-        if status.activity.shouldStop(silenceEnabled: enabled, delay: delay) { finish() }
+        if elapsed >= recordingMaximumSeconds || status.activity.shouldStop(silenceEnabled: enabled, delay: delay) { finish() }
     }
 
     private func tick() {
@@ -298,8 +362,8 @@ final class AppState {
         guard var watch else { return }
         guard preferences.learnCorrections else { self.watch = nil; return }
         if !watch.anchor.target.stillFocused || Date() > watch.expires { finishWatch(); return }
-        guard let value = TextTarget.textValue(watch.anchor.element),
-              let edited = TextProcessing.editedSpan(value: value, prefix: watch.anchor.prefix, suffix: watch.anchor.suffix) else {
+        guard let value = TextTarget.textValue(watch.anchor.element) else { return }
+        guard let edited = TextProcessing.editedSpan(value: value, prefix: watch.anchor.prefix, suffix: watch.anchor.suffix) else {
             self.watch = nil; return
         }
         // Appends, removals and large rewrites are not recognition corrections.
@@ -309,6 +373,7 @@ final class AppState {
         }
         if watch.candidate != edited { watch.candidate = edited; watch.changedAt = Date() }
         self.watch = watch
+        if edited != watch.anchor.inserted, Date().timeIntervalSince(watch.changedAt) >= 2 { finishWatch() }
     }
 
     private func finishWatch() {

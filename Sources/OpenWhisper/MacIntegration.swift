@@ -60,6 +60,7 @@ final class DictationTriggers {
 
 @MainActor
 struct TextTarget {
+    private static var accessibilityRequested = Set<pid_t>()
     let app: NSRunningApplication
     let element: AXUIElement?
     let value: String?
@@ -87,6 +88,13 @@ struct TextTarget {
         guard let app = NSWorkspace.shared.frontmostApplication,
               app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return nil }
         let root = AXUIElementCreateApplication(app.processIdentifier)
+        if accessibilityRequested.insert(app.processIdentifier).inserted,
+           let url = app.bundleURL,
+           FileManager.default.fileExists(atPath: url.appendingPathComponent("Contents/Frameworks/Electron Framework.framework").path) {
+            // Electron documents this assistive-technology flag for exposing its web text tree.
+            // It neither grants macOS permission nor logs keyboard input.
+            AXUIElementSetAttributeValue(root, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        }
         var focused: CFTypeRef?
         AXUIElementCopyAttributeValue(root, kAXFocusedUIElementAttribute as CFString, &focused)
         guard let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else {
@@ -246,12 +254,17 @@ struct TextTarget {
     }
 
     private func verifiedAnchor(_ text: String, expected: (value: String, prefix: String, suffix: String)?) async -> SpanAnchor? {
-        guard let element, let expected else { return nil }
+        guard let element, value != nil else { return nil }
         for _ in 0..<8 {
             try? await Task.sleep(for: .milliseconds(50))
-            guard stillFocused else { return nil }
-            if Self.textValue(element) == expected.value {
+            guard !Task.isCancelled, stillFocused else { return nil }
+            guard let currentValue = Self.textValue(element) else { continue }
+            if let expected, currentValue == expected.value {
                 return SpanAnchor(element: element, target: self, prefix: expected.prefix, suffix: expected.suffix, inserted: text)
+            }
+            if expected == nil, selection == nil, let value,
+               let context = TextProcessing.insertionContext(before: value, after: currentValue, inserted: text) {
+                return SpanAnchor(element: element, target: self, prefix: context.prefix, suffix: context.suffix, inserted: text)
             }
         }
         return nil
@@ -290,66 +303,69 @@ private final class RecordingDisplay {
     var presented = false
 }
 
+struct MouseShortcutSymbol: View {
+    var size: CGFloat = 28
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: size * 0.34).stroke(.primary.opacity(0.8), lineWidth: 1.5)
+            Rectangle().fill(.primary.opacity(0.5)).frame(width: 1, height: size * 0.32).offset(y: -size * 0.29)
+            Rectangle().fill(.primary.opacity(0.5)).frame(height: 1).offset(y: -size * 0.12)
+            Capsule().fill(Color.flowAccent).frame(width: size * 0.25, height: size * 0.39).offset(y: -size * 0.18)
+        }.frame(width: size * 0.72, height: size)
+            .accessibilityLabel("Middle mouse button")
+    }
+}
+
 private struct ListeningOverlay: View {
     let display: RecordingDisplay
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     var body: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 10) {
-                Image(systemName: display.title == "Listening" ? "mic.fill" : "waveform")
-                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(.mint)
-                    .frame(width: 30, height: 30).background(.mint.opacity(0.12), in: Circle())
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(display.title).font(.system(size: 13, weight: .semibold))
+        HStack(spacing: 12) {
+            if display.title == "Listening" {
+                HStack(spacing: 3) {
+                    ForEach(display.levels.suffix(5).indices, id: \.self) { index in
+                        Capsule().fill(Color.flowAccent)
+                            .frame(width: 3, height: max(3, CGFloat(display.levels[index]) * 20))
+                    }
+                }.frame(width: 27, height: 24)
+                    .animation(reduceMotion ? nil : .linear(duration: 0.05), value: display.levels)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Microphone level")
+                    .accessibilityValue("\(Int(display.level * 100)) percent")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Listening").font(.system(size: 12, weight: .semibold))
+                    Text(display.remaining.map { $0 < 2 ? "Stopping…" : elapsed } ?? elapsed)
+                        .font(.system(size: 11, design: .monospaced)).monospacedDigit().foregroundStyle(.secondary)
+                        .accessibilityLabel("Elapsed \(elapsed), limit \(Duration.seconds(display.maximumSeconds).formatted(.time(pattern: .minuteSecond)))")
+                }
+                Spacer(minLength: 8)
+                HStack(spacing: 7) {
+                    if display.middleMouse { MouseShortcutSymbol() }
+                    else {
+                        Text("⌥ Space").font(.system(size: 11, weight: .semibold))
+                            .padding(5).overlay(RoundedRectangle(cornerRadius: 5).stroke(.primary.opacity(0.25)))
+                    }
+                    Text("to finish").font(.system(size: 12, weight: .medium))
+                }.accessibilityElement(children: .combine)
+            } else {
+                Image(systemName: "waveform").foregroundStyle(Color.flowAccent).font(.system(size: 17))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(display.title == "Transcribing locally" ? "Transcribing" : display.title).font(.system(size: 12, weight: .semibold))
                     Text(display.detail).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 8)
-                if display.title == "Listening" {
-                    Text("\(Duration.seconds(display.elapsed).formatted(.time(pattern: .minuteSecond))) / \(Duration.seconds(display.maximumSeconds).formatted(.time(pattern: .minuteSecond)))")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced)).monospacedDigit()
-                } else { ProgressView().controlSize(.mini) }
+                ProgressView().controlSize(.mini)
             }
-            if display.title == "Listening" {
-                HStack(alignment: .center, spacing: 3) {
-                    ForEach(display.levels.indices, id: \.self) { index in
-                        Capsule().fill(.mint.opacity(0.35 + Double(display.levels[index]) * 0.65))
-                            .frame(width: 4, height: max(3, CGFloat(display.levels[index]) * 23))
-                    }
-                    Spacer(minLength: 12)
-                    HStack(spacing: 5) {
-                        if let remaining = display.remaining, remaining < 4.5 {
-                            Text("Finishing in \(Int(ceil(remaining)))s")
-                        } else {
-                            if display.middleMouse {
-                                Image(systemName: "computermouse")
-                                    .overlay(alignment: .top) {
-                                        Capsule().fill(.mint).frame(width: 2, height: 4).offset(y: 2)
-                                    }
-                                    .accessibilityLabel("Middle mouse button")
-                            } else { Text("⌥Space").fontWeight(.semibold) }
-                            Text("to finish")
-                        }
-                    }.font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
-                }.frame(height: 25)
-                    .animation(reduceMotion ? nil : .linear(duration: 0.05), value: display.levels)
-                    .accessibilityElement(children: .combine)
-                    .accessibilityValue("Microphone level: \(Int(display.level * 100)) percent")
-                GeometryReader { geometry in
-                    Capsule().fill(.primary.opacity(0.07))
-                    Capsule().fill(.mint.opacity(0.65))
-                        .frame(width: geometry.size.width * min(1, display.elapsed / display.maximumSeconds))
-                }.frame(height: 2).accessibilityHidden(true)
-            }
-        }.padding(16)
+        }.padding(.horizontal, 16).padding(.vertical, 12)
             .padding(.top, display.notchDepth)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background {
                 if display.notchDepth > 0 {
-                    UnevenRoundedRectangle(bottomLeadingRadius: 22, bottomTrailingRadius: 22).fill(.black)
+                    UnevenRoundedRectangle(bottomLeadingRadius: 18, bottomTrailingRadius: 18).fill(.black)
                 } else {
-                    RoundedRectangle(cornerRadius: 19).fill(.regularMaterial)
-                        .overlay(RoundedRectangle(cornerRadius: 19).strokeBorder(.primary.opacity(0.08), lineWidth: 1))
+                    Capsule().fill(.regularMaterial)
+                        .overlay(Capsule().strokeBorder(.primary.opacity(0.08), lineWidth: 1))
                 }
             }
             .environment(\.colorScheme, display.notchDepth > 0 ? .dark : colorScheme)
@@ -359,6 +375,7 @@ private struct ListeningOverlay: View {
             .opacity(display.presented ? 1 : 0)
             .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.32, dampingFraction: 1), value: display.presented)
     }
+    private var elapsed: String { Duration.seconds(display.elapsed).formatted(.time(pattern: .minuteSecond)) }
 }
 
 @MainActor
@@ -369,7 +386,7 @@ final class RecordingPanel {
     func show(title: String, detail: String, maximumSeconds: Double = 180, middleMouse: Bool = true, screen targetScreen: NSScreen? = nil) {
         dismissal?.cancel(); dismissal = nil
         if panel == nil {
-            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 350, height: 128), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 280, height: 56), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             panel.level = .floating; panel.isOpaque = false; panel.backgroundColor = .clear
             panel.hasShadow = true; panel.ignoresMouseEvents = true
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -391,10 +408,10 @@ final class RecordingPanel {
             let left = screen.auxiliaryTopLeftArea, right = screen.auxiliaryTopRightArea
             let hasNotch = builtIn && screen.safeAreaInsets.top > 0 && left != nil && right != nil
             display.notchDepth = hasNotch ? screen.safeAreaInsets.top : 0
-            let width = hasNotch ? max(350, right!.minX - left!.maxX + 32) : 350
-            let height = 128 + display.notchDepth
+            let width = hasNotch ? max(280, right!.minX - left!.maxX + 20) : 280
+            let height = 56 + display.notchDepth
             let centerX = hasNotch ? (left!.maxX + right!.minX) / 2 : screen.visibleFrame.midX
-            let bottom = hasNotch ? screen.frame.maxY - height : screen.visibleFrame.minY + 30
+            let bottom = hasNotch ? screen.frame.maxY - height : screen.visibleFrame.minY + 24
             panel.setFrame(NSRect(x: centerX - width / 2, y: bottom, width: width, height: height), display: true)
             panel.level = hasNotch ? .statusBar : .floating
             panel.orderFrontRegardless()

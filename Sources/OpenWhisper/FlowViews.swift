@@ -21,6 +21,9 @@ struct FlowWindow: View {
     @Bindable var state: AppState
     @State private var page: FlowPage? = .dictate
     var body: some View {
+        Group {
+        if state.showSetup { SetupGuide(state: state, reviewSettings: { page = .settings }) }
+        else {
         NavigationSplitView {
             List(selection: $page) {
                 ForEach(FlowPage.allCases) { item in Label(item.rawValue, systemImage: item.icon).tag(item) }
@@ -53,6 +56,9 @@ struct FlowWindow: View {
         }
         .tint(Color.flowAccent)
         .frame(minWidth: 820, minHeight: 590)
+        }
+        }.background(Color.flowCanvas).tint(Color.flowAccent)
+            .frame(minWidth: 820, minHeight: 590)
     }
 }
 
@@ -62,6 +68,13 @@ struct DictateView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                if !state.readyToDictate {
+                    HStack {
+                        Label("Finish setup to start dictating", systemImage: "wand.and.stars")
+                        Spacer()
+                        Button("Resume setup", action: state.openSetup)
+                    }.font(.callout).flowCard()
+                }
                 HStack {
                     Label(state.modelReady ? "Local model ready" : (state.modelBusy ? "Preparing local model…" : "Setup needed"), systemImage: state.modelReady ? "checkmark.circle.fill" : "arrow.down.circle")
                         .font(.callout).foregroundStyle(state.modelReady ? Color.flowAccent : Color.secondary)
@@ -346,10 +359,6 @@ struct SpeechProfileView: View {
     }
 }
 
-private extension Color {
-    static var flowAccent: Color { Color(nsColor: .systemTeal) }
-}
-
 private extension View {
     func flowCard() -> some View {
         self.padding(20).frame(maxWidth: .infinity, alignment: .leading)
@@ -375,6 +384,16 @@ struct FlowSettingsView: View {
     @Bindable var state: AppState
     var body: some View {
         Form {
+            Section("General") {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Setup guide").font(.headline)
+                        Text("Permissions, your microphone, and a safe place to try dictation.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Open setup guide", action: state.openSetup).disabled(state.phase != .idle)
+                }
+            }
             Section("Local speech model") {
                 Picker("Model", selection: $state.preferences.model) { ForEach(SpeechModel.allCases) { Text($0.title).tag($0) } }.disabled(state.modelBusy || state.phase != .idle)
                     .onChange(of: state.preferences.model) { _, _ in Task { await state.loadModel(download: false) } }
@@ -389,6 +408,17 @@ struct FlowSettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Dictation") {
+                HStack {
+                    Picker("Input device", selection: Binding(get: { state.preferences.inputDeviceUID ?? "" }, set: { state.preferences.inputDeviceUID = $0.isEmpty ? nil : $0 })) {
+                        Text("Automatic · \(state.systemInputName ?? "system input")").tag("")
+                        ForEach(state.inputDevices) { device in Text(device.name).tag(device.id) }
+                        if let selected = state.preferences.inputDeviceUID, !state.inputDevices.contains(where: { $0.id == selected }) {
+                            Text("Selected microphone unavailable").tag(selected)
+                        }
+                    }
+                    Button("Refresh", action: state.refreshInputDevices)
+                }.disabled(state.phase != .idle)
+                Text("Automatic follows your Mac’s input device. A selected microphone is remembered; switching applies to the next recording.").font(.caption).foregroundStyle(.secondary)
                 Toggle("Middle mouse button starts and stops dictation", isOn: $state.preferences.middleMouse)
                 LabeledContent("Keyboard fallback", value: "⌥Space")
                 LabeledContent("Middle mouse access", value: state.mouseAvailable ? "Available" : "Allow Accessibility, then refresh")
@@ -412,7 +442,11 @@ struct FlowSettingsView: View {
                 Text("Off by default. After speech begins, a quiet pause can finish the recording and insert the text. This uses microphone loudness; background noise can keep it running. Adjust sensitivity for your room.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Permissions and privacy") {
-                HStack { LabeledContent("Microphone", value: state.microphoneStatus); Button("Request microphone access", action: state.requestMicrophone) }
+                HStack {
+                    LabeledContent("Microphone", value: state.microphoneStatus)
+                    if state.microphoneStatus == "Not requested" { Button("Allow microphone", action: state.requestMicrophone) }
+                    else if state.microphoneStatus != "Allowed" { Button("Open microphone settings", action: state.openMicrophoneSettings) }
+                }
                 HStack { Label(state.accessibility ? "Accessibility allowed" : "Accessibility needed", systemImage: state.accessibility ? "checkmark.circle" : "hand.raised"); Spacer(); Button("Open permissions", action: state.requestAccessibility); Button("Refresh", action: state.refreshPermissions) }
                 if !state.accessibility {
                     Text("Already enabled in macOS? Remove the old Open Whisper entry, add the current app again, enable it, then quit and reopen Open Whisper. The app checks actual access, not the saved switch.")
@@ -437,7 +471,7 @@ struct FlowSettingsView: View {
                                 Text("Disabled").tag(Optional.some(false))
                             }
                             Toggle("Press Enter after dictation", isOn: Binding(get: { app.pressEnterAfterDictation ?? false }, set: { app.pressEnterAfterDictation = $0 }))
-                            Text("Only for \(app.name). Enter is pressed after text delivery if the original field still has focus. In chat apps, this may send your message. Off by default.").font(.caption).foregroundStyle(.secondary)
+                            Text("Only for \(app.name). Enter is pressed after text delivery if the original field still has focus. In chat apps, this may send your message. Turn it off to learn from draft corrections before sending. Off by default.").font(.caption).foregroundStyle(.secondary)
                         }.padding(.vertical, 6)
                     }
                 }
@@ -445,6 +479,6 @@ struct FlowSettingsView: View {
             Section("Open model credits") {
                 Text("Parakeet Ultra: Moondream / NVIDIA, CC BY 4.0. FluidAudio: Apache 2.0. Whisper / WhisperKit: MIT. See THIRD_PARTY_NOTICES.md in the source for links and licenses.").font(.caption).foregroundStyle(.secondary)
             }
-        }.formStyle(.grouped)
+        }.formStyle(.grouped).onAppear(perform: state.refreshInputDevices)
     }
 }
