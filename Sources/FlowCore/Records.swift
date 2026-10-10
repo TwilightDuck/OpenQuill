@@ -1,10 +1,13 @@
 import Foundation
+import NaturalLanguage
 
 public struct Dictation: Codable, Identifiable, Sendable {
     public let id: UUID
     public let date: Date
     public let original: String
-    public var text: String
+    public var text: String {
+        didSet { wordCount = TextProcessing.wordRanges(text, language: language).count }
+    }
     public var corrected: String?
     public let appName: String
     public let bundleID: String
@@ -12,7 +15,12 @@ public struct Dictation: Codable, Identifiable, Sendable {
     public let audioSeconds: Double
     public let processingSeconds: Double
     public var delivery: String
-    public var wordCount: Int { text.split(whereSeparator: \.isWhitespace).count }
+    public private(set) var wordCount: Int
+
+    // Derived on load or edit, never persisted or recomputed for a listening frame.
+    private enum CodingKeys: String, CodingKey {
+        case id, date, original, text, corrected, appName, bundleID, language, audioSeconds, processingSeconds, delivery
+    }
 
     public init(id: UUID = UUID(), date: Date = Date(), original: String, text: String,
                 appName: String, bundleID: String, language: String, audioSeconds: Double,
@@ -21,6 +29,17 @@ public struct Dictation: Codable, Identifiable, Sendable {
         self.appName = appName; self.bundleID = bundleID; self.language = language
         self.audioSeconds = audioSeconds; self.processingSeconds = processingSeconds
         self.delivery = delivery
+        wordCount = TextProcessing.wordRanges(text, language: language).count
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(id: values.decode(UUID.self, forKey: .id), date: values.decode(Date.self, forKey: .date),
+            original: values.decode(String.self, forKey: .original), text: values.decode(String.self, forKey: .text),
+            appName: values.decode(String.self, forKey: .appName), bundleID: values.decode(String.self, forKey: .bundleID),
+            language: values.decode(String.self, forKey: .language), audioSeconds: values.decode(Double.self, forKey: .audioSeconds),
+            processingSeconds: values.decode(Double.self, forKey: .processingSeconds), delivery: values.decode(String.self, forKey: .delivery))
+        corrected = try values.decodeIfPresent(String.self, forKey: .corrected)
     }
 }
 
@@ -56,7 +75,7 @@ public struct FlowData: Codable, Sendable {
     }
 
     public mutating func learn(original: String, edited: String, bundleID: String, language: String) {
-        guard let change = TextProcessing.correction(original: original, edited: edited) else { return }
+        guard let change = TextProcessing.correction(original: original, edited: edited, language: language) else { return }
         // Conflicting corrections stay inactive until the user chooses one.
         let conflict = corrections.contains { $0.from.caseInsensitiveCompare(change.from) == .orderedSame && $0.to != change.to && $0.bundleID == bundleID && $0.language == language }
         if conflict {
@@ -74,6 +93,17 @@ public struct FlowData: Codable, Sendable {
 }
 
 public enum TextProcessing {
+    static func wordRanges(_ text: String, language: String? = nil) -> [Range<String.Index>] {
+        let tokenizer = NLTokenizer(unit: .word)
+        tokenizer.string = text
+        if let language, !["auto", "unknown", "*", "default"].contains(language) {
+            tokenizer.setLanguage(NLLanguage(rawValue: language == "jw" ? "jv" : language))
+        }
+        return tokenizer.tokens(for: text.startIndex..<text.endIndex).filter {
+            text[$0].contains { $0.isLetter || $0.isNumber }
+        }
+    }
+
     /// A readable editor may expose text but omit its caret. Confirm the complete
     /// insertion without guessing that caret or accepting a partial text change.
     public static func isExactInsertion(before: String, after: String, inserted: String) -> Bool {
@@ -125,16 +155,32 @@ public enum TextProcessing {
                 return first > second
             }
         if !rules.isEmpty {
-            let alternatives = rules.map { NSRegularExpression.escapedPattern(for: $0.from) }.joined(separator: "|")
-            let pattern = "(?<![\\p{L}\\p{N}_])(?:" + alternatives + ")(?![\\p{L}\\p{N}_])"
-            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
-                for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
-                    let phrase = (text as NSString).substring(with: match.range)
-                    if let rule = rules.first(where: { $0.from.caseInsensitiveCompare(phrase) == .orderedSame }) {
-                        text = (text as NSString).replacingCharacters(in: match.range, with: rule.to)
-                    }
+            let boundaries = Set(wordRanges(text, language: language).flatMap { [$0.lowerBound, $0.upperBound] })
+            func startsWord(_ index: String.Index) -> Bool {
+                guard index != text.startIndex else { return true }
+                let previous = text[text.index(before: index)]
+                return previous != "_" && (!(previous.isLetter || previous.isNumber) || boundaries.contains(index))
+            }
+            func endsWord(_ index: String.Index) -> Bool {
+                guard index != text.endIndex else { return true }
+                let next = text[index]
+                return next != "_" && (!(next.isLetter || next.isNumber) || boundaries.contains(index))
+            }
+            var candidates: [(range: NSRange, to: String, priority: Int)] = []
+            for (priority, rule) in rules.enumerated() {
+                guard let regex = try? NSRegularExpression(pattern: NSRegularExpression.escapedPattern(for: rule.from), options: .caseInsensitive) else { continue }
+                for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                    guard let range = Range(match.range, in: text), startsWord(range.lowerBound), endsWord(range.upperBound) else { continue }
+                    candidates.append((match.range, rule.to, priority))
                 }
             }
+            candidates.sort { $0.range.location == $1.range.location ? $0.priority < $1.priority : $0.range.location < $1.range.location }
+            var edits: [(range: NSRange, to: String)] = []
+            var end = 0
+            for candidate in candidates where candidate.range.location >= end {
+                edits.append((candidate.range, candidate.to)); end = NSMaxRange(candidate.range)
+            }
+            for edit in edits.reversed() { text = (text as NSString).replacingCharacters(in: edit.range, with: edit.to) }
         }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -145,17 +191,25 @@ public enum TextProcessing {
         return regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: NSRegularExpression.escapedTemplate(for: replacement))
     }
 
-    public static func correction(original: String, edited: String, requireSharedContext: Bool = false) -> (from: String, to: String)? {
-        let before = original.split(whereSeparator: \.isWhitespace).map(String.init)
-        let after = edited.split(whereSeparator: \.isWhitespace).map(String.init)
+    public static func correction(original: String, edited: String, requireSharedContext: Bool = false, language: String? = nil) -> (from: String, to: String)? {
+        let beforeRanges = wordRanges(original, language: language)
+        let afterRanges = wordRanges(edited, language: language)
+        let before = beforeRanges.map { String(original[$0]) }
+        let after = afterRanges.map { String(edited[$0]) }
         guard before != after, !before.isEmpty, !after.isEmpty else { return nil }
         var start = 0
         while start < min(before.count, after.count) && before[start] == after[start] { start += 1 }
         var end = 0
         while end < min(before.count, after.count) - start && before[before.count - 1 - end] == after[after.count - 1 - end] { end += 1 }
         guard !requireSharedContext || start > 0 || end > 0 else { return nil }
-        let from = before[start..<(before.count - end)].joined(separator: " ")
-        let to = after[start..<(after.count - end)].joined(separator: " ")
+        guard start < before.count - end, start < after.count - end else { return nil }
+        let beforeRange = beforeRanges[start].lowerBound..<beforeRanges[before.count - end - 1].upperBound
+        let afterRange = afterRanges[start].lowerBound..<afterRanges[after.count - end - 1].upperBound
+        // Preserve literal spacing and punctuation; an edit outside the learned words is ambiguous.
+        guard original[..<beforeRange.lowerBound] == edited[..<afterRange.lowerBound],
+              original[beforeRange.upperBound...] == edited[afterRange.upperBound...] else { return nil }
+        let from = String(original[beforeRange])
+        let to = String(edited[afterRange])
         // ponytail: learn only short contiguous substitutions; complex rewrites need explicit vocabulary.
         guard !from.isEmpty, !to.isEmpty, from.count <= 64, to.count <= 64,
               before.count - start - end <= 3, after.count - start - end <= 3,

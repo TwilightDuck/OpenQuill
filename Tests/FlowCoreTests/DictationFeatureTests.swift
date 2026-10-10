@@ -15,6 +15,7 @@ import FlowCore
     try store.save(data)
     let restored = try store.load()
     #expect(restored.dictations.first?.id == record.id)
+    #expect(restored.dictations.first?.wordCount == 5)
     #expect(TextProcessing.clean("Contact Acmey and Acmeville.", corrections: restored.corrections, bundleID: "notes", language: "en", spokenPunctuation: false) == "Contact Acme and Acmeville.")
     #expect(TextProcessing.clean("Contact Acmey.", corrections: restored.corrections, bundleID: "mail", language: "en", spokenPunctuation: false) == "Contact Acmey.")
     #expect(TextProcessing.clean("Contact Acmey.", corrections: restored.corrections, bundleID: "notes", language: "nl", spokenPunctuation: false) == "Contact Acmey.")
@@ -123,6 +124,49 @@ func quietPauseStoppingWaitsForSpeechRespectsToggleAndHonorsTheChosenRecordingLi
     #expect(profile.languages.first?.name == "en")
     #expect(profile.phrases.first(where: { $0.name == "you know" })?.count == 1)
     #expect(!profile.phrases.contains(where: { $0.name == "uh" }))
+    let multilingual = SpeechProfile(records: [
+        record("明日の朝、駅で会いましょう。", language: "ja"),
+        record("我喜欢苹果。明天见。", language: "zh"),
+        record("ฉันชอบภาษาไทยมาก", language: "th"),
+        record("Wir treffen uns um neun Uhr.", language: "de"),
+        record("👋 !!!", language: "en")
+    ])
+    #expect(multilingual.languages.first(where: { $0.name == "ja" })!.words >= 5)
+    #expect(multilingual.languages.first(where: { $0.name == "zh" })!.words >= 4)
+    #expect(multilingual.languages.first(where: { $0.name == "th" })!.words >= 3)
+    #expect(multilingual.languages.first(where: { $0.name == "en" })!.words == 0)
+    #expect(multilingual.phrases.isEmpty) // German “um” is a preposition, not an English filler.
+    var updated = record("明日の朝、駅で会いましょう。", language: "ja")
+    updated.text = "Meet me tomorrow."
+    #expect(updated.wordCount == 3)
+    let restored = try? JSONDecoder().decode(Dictation.self, from: JSONEncoder().encode(updated))
+    #expect(restored?.wordCount == 3)
+}
+
+@Test func multilingualNameCorrectionsKeepLiteralTextAndSurviveRestart() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let store = DiskStore(url: folder.appendingPathComponent("history.json"))
+    let cases = [
+        ("en", "Contact Acmey.", "Contact Acme.", "Acmey", "Acme", "Ask Acmey, then Acmeyville.", "Ask Acme, then Acmeyville."),
+        ("ja", "明日は東京で山田さんに会います。", "明日は東京で山本さんに会います。", "山田", "山本", "山田さんに電話します。", "山本さんに電話します。"),
+        ("zh", "明天联系Acmey讨论报告。", "明天联系Acme讨论报告。", "Acmey", "Acme", "请让Acmey给Acmeyville发邮件。", "请让Acme给Acmeyville发邮件。"),
+        ("th", "พรุ่งนี้เราจะพบAcmeyที่สถานี", "พรุ่งนี้เราจะพบAcmeที่สถานี", "Acmey", "Acme", "เราจะพบAcmeyวันนี้", "เราจะพบAcmeวันนี้"),
+        ("en", "Send this to New  Yorc  Cite tomorrow.", "Send this to New  York  City tomorrow.", "Yorc  Cite", "York  City", "Ask Yorc  Cite today.", "Ask York  City today.")
+    ]
+    for (language, original, edited, from, to, next, expected) in cases {
+        var data = FlowData()
+        for _ in 0..<2 { data.learn(original: original, edited: edited, bundleID: "scratch", language: language) }
+        #expect(data.corrections.first?.from == from)
+        #expect(data.corrections.first?.to == to)
+        #expect(data.corrections.first?.enabled == true)
+        try store.save(data)
+        let restored = try store.load()
+        #expect(TextProcessing.clean(next, corrections: restored.corrections, bundleID: "scratch", language: language, spokenPunctuation: false) == expected)
+        #expect(TextProcessing.clean(next, corrections: restored.corrections, bundleID: "other-app", language: language, spokenPunctuation: false) == next)
+    }
+    #expect(TextProcessing.correction(original: "明日は東京です。", edited: "今日は大阪で会議です。", requireSharedContext: true) == nil)
+    #expect(TextProcessing.correction(original: "Contact Acmey.", edited: "Contact Acmey!", requireSharedContext: true) == nil)
 }
 
 @Test func enterReadbackAcceptsOnlyTheFullInsertionAndPreservesExistingText() {

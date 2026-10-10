@@ -16,20 +16,25 @@ final class DictationTriggers {
     private var source: CFRunLoopSource?
     var hotkeyError: String?
     var mouseAvailable: Bool { tap != nil }
+    var keyboardAvailable: Bool { handler != nil && hotkey != nil }
 
     func register() {
         let context = Unmanaged.passUnretained(self).toOpaque()
         if handler == nil {
             var event = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-            InstallEventHandler(GetApplicationEventTarget(), { _, _, pointer in
+            let status = InstallEventHandler(GetApplicationEventTarget(), { _, _, pointer in
                 guard let pointer else { return OSStatus(eventNotHandledErr) }
                 MainActor.assumeIsolated {
                     Unmanaged<DictationTriggers>.fromOpaque(pointer).takeUnretainedValue().onToggle?()
                 }
                 return noErr
             }, 1, &event, context, &handler)
-            let status = RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), EventHotKeyID(signature: 0x57464C57, id: 1), GetApplicationEventTarget(), 0, &hotkey)
-            if status != noErr { hotkeyError = "⌥Space is unavailable (\(status)). Another app may be using it." }
+            if status != noErr { hotkeyError = "Keyboard shortcut handler unavailable (\(status))." }
+        }
+        if handler != nil && hotkey == nil {
+            // A non-exclusive registration can succeed while another app suppresses its events.
+            let status = RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), EventHotKeyID(signature: 0x57464C57, id: 1), GetApplicationEventTarget(), UInt32(kEventHotKeyExclusive), &hotkey)
+            hotkeyError = status == noErr ? nil : "⌥Space is unavailable (\(status)). Another app may be using it."
         }
         guard tap == nil, AXIsProcessTrusted() else { return }
         let mask = (CGEventMask(1) << CGEventType.otherMouseDown.rawValue) | (CGEventMask(1) << CGEventType.otherMouseUp.rawValue) | (CGEventMask(1) << CGEventType.keyDown.rawValue)

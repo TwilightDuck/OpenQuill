@@ -22,7 +22,7 @@ struct FlowWindow: View {
     @State private var page: FlowPage? = .dictate
     var body: some View {
         Group {
-        if state.showSetup { SetupGuide(state: state, reviewSettings: { page = .settings }) }
+        if state.showSetup { SetupGuide(state: state, reviewSettings: { page = .settings }, startDictating: { page = .dictate }) }
         else {
         NavigationSplitView {
             List(selection: $page) {
@@ -37,11 +37,11 @@ struct FlowWindow: View {
             VStack(spacing: 0) {
                 if let notice = state.notice {
                     HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: "info.circle").foregroundStyle(.orange)
+                        Image(systemName: "info.circle").foregroundStyle(Color.flowWarning)
                         Text(notice).font(.callout).textSelection(.enabled)
                         Spacer()
                         Button { state.notice = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel("Dismiss message")
-                    }.padding(14).background(.orange.opacity(0.08))
+                    }.padding(14).background(Color.flowWarning.opacity(0.08))
                 }
                 switch page ?? .dictate {
                 case .dictate: DictateView(state: state, openSettings: { page = .settings })
@@ -85,15 +85,17 @@ struct DictateView: View {
                 VStack(spacing: 18) {
                     Image(systemName: "waveform").font(.system(size: 46, weight: .light)).foregroundStyle(Color.flowAccent).accessibilityHidden(true)
                     Text(state.phase == .idle ? "Speak your mind." : state.phase.title).font(.system(size: 34, weight: .semibold, design: .rounded)).tracking(-0.8)
-                    Text(state.phase == .recording ? "\(Int(state.elapsed))s of \(state.recordingLimitLabel) · press again to finish" : (state.preferences.middleMouse ? "Middle-click. Speak. Click again." : "Press ⌥Space. Speak. Press again."))
+                    Text(state.phase == .recording ? "\(Int(state.elapsed))s of \(state.recordingLimitLabel) · press again to finish" : (!state.shortcutAvailable ? "Check shortcut access in Settings." : (state.preferences.middleMouse && state.mouseAvailable ? "Middle-click. Speak. Click again." : "Press ⌥Space. Speak. Press again.")))
                         .font(.body).foregroundStyle(.secondary)
                     HStack(spacing: 12) {
-                        if state.preferences.middleMouse {
+                        if state.preferences.middleMouse && state.mouseAvailable {
                             HStack(spacing: 8) { MouseShortcutSymbol(size: 26); Text("Middle-click") }
                                 .padding(.horizontal, 12).padding(.vertical, 8).background(.quaternary, in: Capsule())
-                            Text("or").foregroundStyle(.secondary)
+                            if state.keyboardAvailable { Text("or").foregroundStyle(.secondary) }
                         }
-                        Text("⌥ Space").padding(.horizontal, 12).padding(.vertical, 8).background(.quaternary, in: Capsule())
+                        if state.keyboardAvailable {
+                            Text("⌥ Space").padding(.horizontal, 12).padding(.vertical, 8).background(.quaternary, in: Capsule())
+                        }
                     }.font(.callout)
                     if state.phase == .processing || state.phase == .starting || state.phase == .cancelling { ProgressView().controlSize(.small) }
                     if state.phase == .recording {
@@ -103,7 +105,7 @@ struct DictateView: View {
                     if !state.preferences.model.supports(state.preferences.language) {
                         Text("\(SpeechLanguages.name(state.preferences.language)) requires a Whisper model.").font(.callout).foregroundStyle(.secondary)
                     }
-                    if !state.modelReady || !state.preferences.model.supports(state.preferences.language) { Button("Set up dictation", action: openSettings).buttonStyle(.borderedProminent) }
+                    if !state.readyToDictate { Button("Set up dictation", action: openSettings).buttonStyle(.borderedProminent) }
                     if state.phase != .idle && state.phase != .inserting { Button("Cancel", action: state.cancel).keyboardShortcut(.cancelAction) }
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 38)
@@ -228,7 +230,7 @@ struct StatisticsView: View {
                     metric("Active corrections", value: state.activeRules.formatted())
                     metric("Estimated time saved", value: "\(max(0, Int(Double(state.totalWords) / 45 - state.totalAudio / 60))) min")
                 }
-                Text("Statistics cover your retained history. Time saved compares speaking time with typing at 45 words per minute. Processing measures model inference after recording ends.")
+                Text("Word counts use this Mac’s language-aware word boundaries; punctuation and emoji aren’t words. Counts and pace are estimates, particularly for languages without spaces. Time saved assumes typing at 45 words per minute. Processing measures model inference after recording ends.")
                     .font(.caption).foregroundStyle(.secondary)
                 if !state.data.dictations.isEmpty {
                     Divider()
@@ -302,7 +304,7 @@ struct VocabularyView: View {
                 TextField("Heard as", text: $heard).textFieldStyle(.roundedBorder)
                 TextField("Write as", text: $spelling).textFieldStyle(.roundedBorder)
                 LabeledContent("Language") { SpeechLanguagePicker(title: "Spelling rule language", selection: $language, special: "*") }
-                if invalid { Text("Use two different names or short phrases, up to 128 characters each.").font(.caption).foregroundStyle(.red) }
+                if invalid { Text("Use two different names or short phrases, up to 128 characters each.").font(.caption).foregroundStyle(Color.flowDanger) }
                 HStack { Spacer(); Button("Cancel") { teaching = false }; Button("Save spelling") {
                     if state.teachName(from: heard, to: spelling, language: language) { heard = ""; spelling = ""; invalid = false; teaching = false }
                     else { invalid = true }
@@ -354,7 +356,7 @@ struct SpeechProfileView: View {
                     }
                     Text("Filler phrase analysis currently covers English and Dutch. Speech models may remove fillers. These counts describe saved text; they are not a grammar, pronunciation or fluency score.").font(.caption).foregroundStyle(.secondary)
                 }.flowCard()
-                Text("Language totals follow the selected or detected dictation language. Pace includes pauses and uses transcript word counts. This profile excludes imported audio and follows retained history; deleting history changes these statistics. No audio recordings or voiceprints are stored.").font(.caption).foregroundStyle(.secondary)
+                Text("Language totals follow the selected or detected language. Pace includes pauses and uses estimated word boundaries, including languages without spaces. This profile excludes imported audio and follows retained history; deleting history changes these statistics. No audio recordings or voiceprints are stored.").font(.caption).foregroundStyle(.secondary)
             }.padding(30)
         }
     }
@@ -401,7 +403,7 @@ struct FlowSettingsView: View {
                 Text(state.preferences.model.detail).font(.callout).foregroundStyle(.secondary)
                 Text(state.preferences.model.languageCoverage).font(.caption).foregroundStyle(Color.flowAccent)
                 if !state.preferences.model.supports(state.preferences.language) {
-                    Text("Choose Whisper for \(SpeechLanguages.name(state.preferences.language)), then download or load its model.").font(.callout).foregroundStyle(.orange)
+                    Text("Choose Whisper for \(SpeechLanguages.name(state.preferences.language)), then download or load its model.").font(.callout).foregroundStyle(Color.flowWarning)
                 }
                 Text(state.modelStatus).font(.callout)
                 if state.modelBusy { ProgressView(); if state.progress > 0 { ProgressView(value: state.progress) } }
@@ -425,9 +427,9 @@ struct FlowSettingsView: View {
                 }.disabled(state.phase != .idle)
                 Text("Automatic follows your Mac’s input device. A selected microphone is remembered; switching applies to the next recording.").font(.caption).foregroundStyle(.secondary)
                 Toggle("Middle mouse button starts and stops dictation", isOn: $state.preferences.middleMouse)
-                LabeledContent("Keyboard fallback", value: "⌥Space")
-                LabeledContent("Middle mouse access", value: state.mouseAvailable ? "Available" : "Allow Accessibility, then refresh")
-                if let error = state.hotkeyError { Text(error).foregroundStyle(.orange) }
+                LabeledContent("Keyboard fallback", value: state.keyboardAvailable ? "⌥Space · Available" : "Unavailable")
+                LabeledContent("Middle mouse access", value: state.mouseAvailable ? "Available" : (state.accessibility ? "Unavailable · Refresh access" : "Allow Accessibility, then refresh"))
+                if let error = state.hotkeyError { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Color.flowWarning) }
                 LabeledContent("Default language") { SpeechLanguagePicker(title: "Default language", selection: $state.preferences.language, model: state.preferences.model) }.disabled(state.phase != .idle)
                 Toggle("Recognize spoken punctuation commands", isOn: $state.preferences.spokenPunctuation)
                 Text("Commands currently cover English and Dutch: “new paragraph” or “nieuwe alinea”. Model punctuation is preserved in every language. Esc cancels.").font(.caption).foregroundStyle(.secondary)
@@ -452,7 +454,12 @@ struct FlowSettingsView: View {
                     if state.microphoneStatus == "Not requested" { Button("Allow microphone", action: state.requestMicrophone) }
                     else if state.microphoneStatus != "Allowed" { Button("Open microphone settings", action: state.openMicrophoneSettings) }
                 }
-                HStack { Label(state.accessibility ? "Accessibility allowed" : "Accessibility needed", systemImage: state.accessibility ? "checkmark.circle" : "hand.raised"); Spacer(); Button("Open permissions", action: state.requestAccessibility); Button("Refresh", action: state.refreshPermissions) }
+                HStack {
+                    Label(state.accessibility ? "Accessibility allowed" : "Accessibility needed", systemImage: state.accessibility ? "checkmark.circle" : "hand.raised")
+                    Spacer()
+                    if !state.accessibility { Button("Allow Accessibility", action: state.requestAccessibility) }
+                    Button("Refresh", action: state.refreshPermissions)
+                }
                 if !state.accessibility {
                     Text("Already enabled in macOS? Remove the old Open Whisper entry, add the current app again, enable it, then quit and reopen Open Whisper. The app checks actual access, not the saved switch.")
                         .font(.caption).foregroundStyle(.secondary)

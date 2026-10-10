@@ -75,6 +75,7 @@ final class AppState {
     private(set) var recordingMaximumSeconds = 180.0
     var accessibility = AXIsProcessTrusted()
     var mouseAvailable = false
+    var keyboardAvailable = false
     var lastText = ""
     var historySearch = ""
     var hotkeyError: String?
@@ -131,6 +132,7 @@ final class AppState {
         triggers.register()
         hotkeyError = triggers.hotkeyError
         mouseAvailable = triggers.mouseAvailable
+        keyboardAvailable = triggers.keyboardAvailable
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
@@ -153,7 +155,14 @@ final class AppState {
     }
     var profile: SpeechProfile { SpeechProfile(records: data.dictations) }
     var inputDeviceAvailable: Bool { preferences.inputDeviceUID.map { uid in inputDevices.contains { $0.id == uid } } ?? (systemInputName != nil) }
-    var readyToDictate: Bool { modelReady && preferences.model.supports(preferences.language) && microphoneStatus == "Allowed" && accessibility && inputDeviceAvailable }
+    var shortcutAvailable: Bool { keyboardAvailable || (preferences.middleMouse && mouseAvailable) }
+    var shortcutLabel: String {
+        if preferences.middleMouse && mouseAvailable {
+            return keyboardAvailable ? "Middle-click or ⌥ Space" : "Middle-click"
+        }
+        return keyboardAvailable ? "⌥ Space" : "No dictation shortcut available"
+    }
+    var readyToDictate: Bool { modelReady && preferences.model.supports(preferences.language) && microphoneStatus == "Allowed" && accessibility && inputDeviceAvailable && shortcutAvailable }
     var inputDeviceName: String {
         guard let uid = preferences.inputDeviceUID else { return systemInputName.map { "Automatic · \($0)" } ?? "No system input available" }
         return inputDevices.first(where: { $0.id == uid })?.name ?? "Selected microphone unavailable"
@@ -167,6 +176,7 @@ final class AppState {
         accessibility = AXIsProcessTrusted()
         microphoneStatus = Self.describeMicrophone()
         triggers.register(); mouseAvailable = triggers.mouseAvailable
+        keyboardAvailable = triggers.keyboardAvailable; hotkeyError = triggers.hotkeyError
     }
 
     func refreshInputDevices() {
@@ -371,10 +381,12 @@ final class AppState {
         guard let edited = TextProcessing.editedSpan(value: value, prefix: watch.anchor.prefix, suffix: watch.anchor.suffix) else {
             self.watch = nil; return
         }
-        // Appends, removals and large rewrites are not recognition corrections.
+        guard !edited.isEmpty else { self.watch = nil; return }
+        // Deleting a mistaken word before retyping it can span several polls.
+        // Discard the pending guess, but keep watching the anchored span.
         guard edited == watch.anchor.inserted || TextProcessing.correction(original: watch.anchor.inserted, edited: edited,
-            requireSharedContext: watch.anchor.prefix.isEmpty && watch.anchor.suffix.isEmpty) != nil else {
-            self.watch = nil; return
+            requireSharedContext: watch.anchor.prefix.isEmpty && watch.anchor.suffix.isEmpty, language: watch.language) != nil else {
+            watch.candidate = nil; self.watch = watch; return
         }
         if watch.candidate != edited { watch.candidate = edited; watch.changedAt = Date() }
         self.watch = watch

@@ -41,7 +41,7 @@ public struct SpeechProfile: Sendable {
     }
     /// These are observations of transcripts, not a judgment of pronunciation or fluency.
     public var phrases: [(name: String, count: Int)] {
-        let text = recordings.map { $0.corrected ?? $0.text }.joined(separator: "\n")
+        let text = recordings.filter { ["en", "nl"].contains($0.language) }.map { $0.corrected ?? $0.text }.joined(separator: "\n")
         return ["um", "uh", "you know", "sort of", "kind of", "eh", "euh", "zeg maar"].compactMap { phrase in
             let pattern = "(?<![\\p{L}\\p{N}_])" + NSRegularExpression.escapedPattern(for: phrase) + "(?![\\p{L}\\p{N}_])"
             guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return nil }

@@ -10,6 +10,8 @@ extension Color {
     static let flowSecondary = adaptive(0x5B6460, 0xA7B0AC)
     static let flowSoft = adaptive(0xDCEFE8, 0x16332D)
     static let flowAccentText = adaptive(0x0B5F58, 0x7FE0CE)
+    static let flowWarning = adaptive(0x8F5600, 0xE7B04A)
+    static let flowDanger = adaptive(0xB42318, 0xFF7B6E)
 
     private static func adaptive(_ light: UInt32, _ dark: UInt32) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in

@@ -3,6 +3,7 @@ import SwiftUI
 struct SetupGuide: View {
     @Bindable var state: AppState
     let reviewSettings: () -> Void
+    let startDictating: () -> Void
     @State private var step = 0
     @State private var completed = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -21,7 +22,7 @@ struct SetupGuide: View {
                     }
                 }.accessibilityElement(children: .ignore).accessibilityLabel("Setup: \(steps[step]), step \(step + 1) of 5")
                 Spacer()
-                Button("Skip setup") { state.closeSetup(skipped: true) }
+                Button("Skip setup") { state.closeSetup(skipped: true); startDictating() }
                     .buttonStyle(.borderless).foregroundStyle(Color.flowSecondary).disabled(state.phase == .inserting)
             }.padding(.bottom, 20)
 
@@ -39,7 +40,7 @@ struct SetupGuide: View {
                     }
                     if let notice = state.notice {
                         Label(notice, systemImage: "info.circle")
-                            .font(.system(size: 12)).foregroundStyle(.orange).frame(maxWidth: 550)
+                            .font(.system(size: 12)).foregroundStyle(Color.flowWarning).frame(maxWidth: 550)
                     }
                 }.frame(maxWidth: .infinity).padding(.vertical, 16)
             }.scrollIndicators(.hidden)
@@ -75,7 +76,7 @@ struct SetupGuide: View {
         return step == 4 ? "Finish setup" : "Continue"
     }
     private func advance() {
-        if completed { state.closeSetup(skipped: !state.readyToDictate); return }
+        if completed { state.closeSetup(skipped: !state.readyToDictate); startDictating(); return }
         if step == 2 && !state.modelReady && !state.modelBusy {
             Task { await state.loadModel(download: true) }; return
         }
@@ -135,11 +136,11 @@ struct SetupGuide: View {
         VStack(spacing: 24) {
             heading("Two permissions, both yours to give.", "Hear your voice. Put your words in the app you’re using.")
             HStack(alignment: .top, spacing: 16) {
-                permissionCard("Microphone", symbol: "mic", reason: "To hear you while you dictate. Audio isn’t saved.", allowed: state.microphoneStatus == "Allowed", denied: state.microphoneStatus == "Not allowed") {
+                permissionCard("Microphone", symbol: "mic", reason: "To hear you while you dictate. Audio isn’t saved.", allowed: state.microphoneStatus == "Allowed", status: state.microphoneStatus, denied: state.microphoneStatus == "Not allowed") {
                     if state.microphoneStatus == "Not requested" { Button("Allow microphone", action: state.requestMicrophone) }
                     else { Button("Open privacy settings", action: state.openMicrophoneSettings) }
                 }
-                permissionCard("Accessibility", symbol: "accessibility", reason: "To type into your focused text field and learn from draft edits.", allowed: state.accessibility) {
+                permissionCard("Accessibility", symbol: "accessibility", reason: "To type into your focused text field and learn from draft edits.", allowed: state.accessibility, status: state.accessibility ? "Allowed" : "Access needed") {
                     Button("Allow Accessibility", action: state.requestAccessibility)
                 }
             }.frame(maxWidth: 580)
@@ -147,15 +148,15 @@ struct SetupGuide: View {
                 .font(.system(size: 11)).foregroundStyle(Color.flowSecondary)
         }
     }
-    private func permissionCard<Actions: View>(_ title: String, symbol: String, reason: String, allowed: Bool, denied: Bool = false, @ViewBuilder actions: () -> Actions) -> some View {
+    private func permissionCard<Actions: View>(_ title: String, symbol: String, reason: String, allowed: Bool, status: String, denied: Bool = false, @ViewBuilder actions: () -> Actions) -> some View {
         VStack(spacing: 14) {
             Image(systemName: symbol).font(.system(size: 24)).foregroundStyle(Color.flowAccent)
                 .frame(width: 56, height: 56).background(Color.flowSoft, in: Circle())
             Text(title).font(.system(size: 15, weight: .semibold))
             Text(reason).font(.system(size: 12)).foregroundStyle(Color.flowSecondary)
                 .multilineTextAlignment(.center).frame(height: 36)
-            Label(allowed ? "Allowed" : (denied ? "Not allowed" : "Not requested"), systemImage: allowed ? "checkmark.circle.fill" : (denied ? "exclamationmark.circle.fill" : "circle"))
-                .font(.system(size: 12, weight: .medium)).foregroundStyle(allowed ? Color.flowAccent : (denied ? Color.red : Color.flowSecondary))
+            Label(status, systemImage: allowed ? "checkmark.circle.fill" : (denied ? "exclamationmark.circle.fill" : "circle"))
+                .font(.system(size: 12, weight: .medium)).foregroundStyle(allowed ? Color.flowAccent : (denied ? Color.flowDanger : Color.flowSecondary))
             if !allowed { actions().buttonStyle(.bordered).controlSize(.large) }
         }.frame(maxWidth: .infinity).padding(24)
             .background(Color.flowSurface, in: RoundedRectangle(cornerRadius: 16))
@@ -229,7 +230,7 @@ struct SetupGuide: View {
                     Text("The microphone choice is remembered.").font(.system(size: 11)).foregroundStyle(Color.flowSecondary)
                     Spacer(); Button("Refresh", action: state.refreshInputDevices).buttonStyle(.borderless)
                 }
-                if let error = state.hotkeyError { Label(error, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange) }
+                if let error = state.hotkeyError { Label(error, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(Color.flowWarning) }
             }.padding(24).frame(maxWidth: 520).background(Color.flowSurface, in: RoundedRectangle(cornerRadius: 16))
                 .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.flowSeparator))
         }
@@ -263,7 +264,7 @@ struct SetupGuide: View {
                     if state.phase != .idle { Button("Cancel", action: state.cancel).disabled(state.phase == .inserting) }
                     if state.practiceFinished { Label("That’s your voice, typed locally.", systemImage: "checkmark.circle").font(.system(size: 12)).foregroundStyle(Color.flowAccent) }
                 }
-                Text("\(state.preferences.middleMouse ? "You can also use middle-click or ⌥ Space." : "You can also use ⌥ Space.") Practice text disappears when you leave.")
+            Text("\(state.shortcutAvailable ? "You can also use \(state.shortcutLabel)." : "Use Start practice above; dictation shortcuts are unavailable.") Practice text disappears when you leave.")
                     .font(.system(size: 11)).foregroundStyle(Color.flowSecondary)
             } else {
                 VStack(spacing: 16) {
@@ -302,9 +303,10 @@ struct SetupGuide: View {
                     "Dictate into your app. Draft edits there can teach Open Whisper your words.")
             VStack(alignment: .leading, spacing: 16) {
                 summary(state.modelReady ? "Speech model installed" : "Speech model still needed", ready: state.modelReady)
+                summary("Language: \(SpeechLanguages.name(state.preferences.language))\(state.preferences.model.supports(state.preferences.language) ? "" : " — choose Whisper")", ready: state.preferences.model.supports(state.preferences.language))
                 summary("Microphone: \(state.inputDeviceName)", ready: state.microphoneStatus == "Allowed" && state.inputDeviceAvailable)
                 summary(state.accessibility ? "Text-field access allowed" : "Accessibility still needed", ready: state.accessibility)
-                summary(state.preferences.middleMouse ? "Middle-click or ⌥ Space to dictate" : "⌥ Space to dictate", ready: true)
+                summary(state.shortcutLabel, ready: state.shortcutAvailable)
             }.font(.system(size: 13)).padding(24).frame(maxWidth: 520, alignment: .leading)
                 .background(Color.flowSurface, in: RoundedRectangle(cornerRadius: 16))
             Text("Some apps don’t expose editable text. Learning only runs when the field can be verified.")

@@ -4,6 +4,8 @@ Authored by Claude at the user's request on 10 October 2026, before onboarding i
 
 Implementation alignment: existing user choices and verified product behavior take precedence over proposed defaults. The recording default remains 3 minutes; external-field learning remains bounded to 60 seconds, a 2-second stable edit, and short substitutions up to 64 characters. Dictation pace includes pauses. An unavailable explicitly selected microphone prompts the user to choose another device rather than silently recording from the wrong input. Model setup displays actual available progress, without invented byte counts, ETA, verification stages or resumability. The keyboard shortcut remains Option-Space. Semantic light/dark colors use native dynamic NSColor providers in this SwiftPM app rather than introducing an asset-catalog compilation pipeline. Practice records only after a deliberate start, with no idle microphone monitoring. These adjustments preserve the document's visual direction while keeping the interface truthful.
 
+Readiness includes the chosen language and at least one working dictation shortcut. Completion lists both explicitly. Option-Space is registered exclusively so macOS can report a real conflict; unavailable registration is retried on the existing status refresh. Granted permissions show their status without another request action.
+
 Open Whisper is a quiet instrument. It shows up when you speak and gets out of the way when you don't. Every surface should feel calm, warm and exact: a warm neutral base, one teal accent, real system controls, and honest status.
 
 **Principles**
@@ -44,6 +46,8 @@ Contrast targets are as follows. All text tokens must reach at least 4.5:1 on `c
 - `accentText` on `accentSoft` ≈6:1
 
 Status is never conveyed by color alone. Always pair it with an SF Symbol and a word.
+
+Implementation contrast check: primary text, secondary text, accent, warning and danger tokens each exceed 4.5:1 on canvas, surface and raised surface in both appearances. The lowest warning contrast is 5.51:1 and danger is 5.79:1. These are palette calculations; rendered light/dark appearance still needs visual review.
 
 ## Typography
 
