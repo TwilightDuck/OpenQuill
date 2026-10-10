@@ -1,0 +1,112 @@
+# Open Whisper
+
+A native, free Mac dictation app. Speech recognition, text cleanup, correction learning, history and statistics run on your Mac. A one-time model download is the only network operation the app implements. There are no accounts, API keys, telemetry or cloud transcription.
+
+**Apple silicon · macOS 14+ · English and Dutch / Flemish · MIT licensed**
+
+- Middle-click or Option-Space to start and finish dictation in the focused text field.
+- Personal names, correction rules, app preferences, local history and statistics.
+- Adjustable 1–30 minute recordings and optional quiet-pause stopping.
+- Compact listening feedback that unfolds below a MacBook notch or floats at the bottom of an external display.
+
+This is an early source release. Build it locally using the steps below; a notarized download is not available. Open Whisper is an independent project and is not affiliated with OpenAI or Wispr Flow.
+
+## Run the app
+
+Requires Apple silicon, macOS 14 or later, and Xcode / Swift 6.2 or later to build.
+
+```sh
+./scripts/build-app.sh
+open "dist/Open Whisper.app"
+```
+
+In Settings, download **Parakeet Ultra**. If the files are already present, the app loads them locally on launch. Allow **Microphone** when macOS asks, and enable the app under **System Settings → Privacy & Security → Accessibility**. Refresh permissions in the app. macOS owns these permissions; the app cannot grant them itself. Some systems may also require Input Monitoring for the mouse trigger.
+
+Local builds use a persistent self-signed development identity stored in an owner-only, separate keychain under `~/Library/Application Support/WisperFlowBuildSigning/`. The keychain password is generated locally and kept in an owner-only file in that folder. Its certificate is pinned in the app's designated requirement, so an ordinary rebuild retains the same identity. The build does not change certificate trust settings or use your login keychain. Keep this signing folder private and retain it between builds. Models and history remain in Application Support.
+
+For existing users, the internal bundle identifier (`be.nick.wisperflow`), preferences domain and Application Support paths retain their original names. This compatibility choice preserves permissions, models and history through the Open Whisper rename. New installations use those same internal paths; no personal files or signing identities are included in this repository.
+
+When upgrading from an older ad-hoc build, macOS can show an enabled Accessibility switch for an identity that no longer matches. Remove only this project's **Open Whisper** (previously **Wisper Flow**) entry using −, add `dist/Open Whisper.app` with +, enable it, then quit and reopen the app. **Wispr Flow** is the separate commercial app. This migration needs a fresh grant once; subsequent builds use the same certificate. The app reports actual process access, independently of the displayed macOS switch.
+
+Select a text field in another app, click the **middle mouse button** once, speak, and click again to finish. **Option-Space** is the keyboard alternative. **Escape** cancels recording or transcription. Once text insertion begins it completes as one edit. Middle-button clicks are consumed while the trigger is enabled; disable that trigger in Settings to restore ordinary middle-click behavior. The app stays in the menu bar when its window closes.
+
+## Choose a local model
+
+| Model | Intended use | Approximate download |
+| --- | --- | --- |
+| Parakeet Ultra via FluidAudio | Fast everyday English and Dutch dictation | 630 MB |
+| Whisper large-v3 via WhisperKit | Full multilingual model for accuracy comparisons | 3 GB |
+| Whisper large-v3 Turbo via WhisperKit | Faster Whisper decoding | 1.6 GB |
+
+These sizes are estimates. Model preparation can take longer on the first load while Core ML compiles device-specific graphs. Subsequent dictations keep the model in memory. Only one model is loaded at a time.
+
+English is the default. Dutch / Flemish preserves Dutch text; it does not translate it to English. Auto detection is optional. Parakeet detects speech language internally; the app infers a language label from its output with Apple's local language recognizer. Its language preference filters scripts rather than forcing an English/Dutch decoder token. Whisper supports an explicit language choice and personal vocabulary hints. The runtime choice is not proof of a best model for your voice: compare a representative recording locally, particularly spontaneous Flemish speech.
+
+Primary references: [FluidAudio Ultra measurements](https://github.com/FluidInference/FluidAudio/blob/main/Documentation/ASR/ParakeetUltra.md), [NVIDIA Parakeet language support and benchmarks](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), [Whisper models](https://github.com/openai/whisper), [WhisperKit](https://github.com/argmaxinc/argmax-oss-swift). All three available models are free to run locally. Credits and licenses are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Text insertion and correction learning
+
+The app captures the foreground app, focused field, field value and selected range before recording. If the app, field, caret, selection or text changes before insertion, the transcript is retained for copying. Standard text fields receive normal Unicode text input events directed to the captured app, preserving surrounding text and replacing the selection. This reaches input handlers in browser and Electron editors; the Accessibility selected-text setter is used when normal event delivery is unavailable. History records verified and unverified delivery separately, and an ambiguous delivery is never automatically retried. Apps that do not expose an editable field may need the optional clipboard fallback. That fallback is off by default, restores the clipboard only if nobody else changed it, and may interact with Universal Clipboard. Password fields are blocked.
+
+After verified insertion, the app watches that field for up to 60 seconds while it remains focused. It keeps surrounding text fixed and considers only short, contiguous substitutions inside the dictated span. In an otherwise empty field it requires shared text between the original and edited dictation, so whole-message replacement is not learned. It stops tracking when context changes, and waits for a stable edit before learning. A correction seen twice activates for that app and language; conflicting replacements remain inactive for review. Vocabulary shows every learned rule and allows disabling or deleting it. You can also correct a saved transcript manually. **Vocabulary → Teach a name or term** creates an immediately active “heard as → write as” spelling rule across apps, optionally restricted to English or Dutch. Explicitly taught spellings take precedence over older automatic guesses; otherwise app-specific rules take precedence over global rules. Active correction targets are also supplied to Whisper as recognition hints. Parakeet Ultra uses these rules after recognition; it does not consume the freeform recognition-hints list. Some Electron fields omit the exact selection or text readback needed for safe automatic learning. Parameterized text-range readback is tried for editable fields; when verification is unavailable, use History → Correct or teach the spelling directly.
+
+Learning personal vocabulary uses local replacement rules and recognition hints. It does **not** fine-tune model weights or use a generative grammar model. The speech model provides punctuation and capitalization; optional spoken punctuation commands support English and Dutch. Per-app settings customize language, spoken commands and optional Enter after dictation, and learned replacements are scoped to the detected app. Complex rewrites and ambiguous edits are deliberately skipped.
+
+**Settings → App preferences → [app] → Press Enter after dictation** is opt-in and off by default for every app, including existing saved app preferences. The setting is captured for the original app when dictation starts and applies to hotkey, time-limit and silence completion. Enter is dispatched only after the full typing/paste operation, a short queue-drain delay, and a fresh focus check. Failed, skipped, cancelled and partial insertion never sends Enter; AX-setter delivery needs verification. When readable, changed/unchanged field data can also suppress Enter. For editors without readback, a fully dispatched keyboard operation is not proof of renderer acceptance. Enter can send a message or submit a form; enable this only for apps where you want that behavior. Audio-file imports never press Enter, and a submitted field is not watched as a correction.
+
+## Recording feedback and silence stopping
+
+Choose **Settings → Dictation → Maximum recording** to set a limit from **1 to 30 minutes** (default: 3). The audio-buffer bound, automatic stop, Dictate screen and overlay all use the chosen limit, captured when recording starts. At the limit, the app transcribes and inserts automatically. Longer recordings use more memory and can take longer to transcribe. The listening panel is a persistent, nonactivating SwiftUI view: a real microphone-level history updates at 30 Hz, with fast attack and smooth release. It shows elapsed time and the recording limit without stealing the text-field focus.
+
+**Settings → Dictation → Finish automatically after a quiet pause** is off by default. Enable it and choose 3, 5, 8, or 10 seconds. Once at least 250 ms of continuous above-threshold audio has been observed, a sustained quiet pause finishes through the same transcription/insertion path as the hotkey. This is loudness-based quiet detection, not semantic voice activity detection: background noise can keep it running, and faint speech can fall below the threshold. Choose a sensitivity preset for your microphone and room; threshold changes apply to the next recording. No silence model downloads or network calls are needed.
+
+## Personal speech profile
+
+The Speech profile page summarizes retained dictations: transcript language, average dictation pace including pauses, corrected transcript count, and selected filler phrases found in saved text. Imported audio is excluded. Dialect/accent is a self-described preference and does not adapt model weights. Language labels come from the selected language or local detection; the app does not automatically classify Flemish dialects. Models may remove fillers, so transcript counts are not a pronunciation, fluency, or grammar score. A small reflection tip supports clearer phrasing without pretending to grade the speaker.
+
+## Local data
+
+Stored under `~/Library/Application Support/WisperFlow/`:
+
+- `Models/`: downloaded Core ML model files.
+- `Tokenizer/`: local tokenizer files for Whisper.
+- `history.json`: up to 1,000 transcripts, app/language labels, duration/processing statistics and correction rules. The file has owner-only permissions.
+
+Preferences live in the app's macOS UserDefaults domain. The microphone buffer is in memory, bounded to the chosen recording limit (1–30 minutes), and discarded when stopped. Audio is never saved by dictation. History and learning have separate switches. Disabling history stops new entries and statistics; existing history can be exported or deleted. A corrupt history file is preserved instead of overwritten.
+
+## Validation
+
+```sh
+swift test
+./scripts/verify-offline.sh
+./scripts/verify-signing.sh
+```
+
+The first command checks the local correction/persistence feature flow, context isolation, Unicode, conflicting substitutions, global taught-name precedence, quiet-pause timing/toggle behavior and 1/3/10/30-minute limits, speech-profile accounting, and literal replacement text. The second performs real model inference on generated English and Belgian Dutch speech while macOS denies network access to the executable. It requires the Parakeet model to have been downloaded and the macOS Samantha/Ellen voices to be available. Synthetic speech is a pipeline check, not a measure of microphone quality or the user's accent.
+
+The signing check changes a disposable copy's version, signs it again, and verifies that it satisfies the original app's identity requirement despite having a different code hash. A valid signature from a different signer must fail that requirement. This checks signing continuity; retaining a real Accessibility grant after a rebuild still needs a macOS permission and relaunch check.
+
+The executable also supports local file transcription and explicitly requested downloads:
+
+```sh
+"dist/Open Whisper.app/Contents/MacOS/OpenWhisper" --download-model --model parakeet-ultra
+"dist/Open Whisper.app/Contents/MacOS/OpenWhisper" --transcribe /absolute/path/recording.wav --model parakeet-ultra --language nl
+```
+
+No flag performs an upload. Without `--download-model`, model loading and transcription use local files and fail locally if assets are missing. The app is signed with a local development certificate; it is not notarized for public distribution.
+
+## Live acceptance checks
+
+- Start/stop with a physical middle button and Option-Space; Escape discards a recording.
+- Dictate English and Flemish in Notes, a browser field and your everyday editor; measure time from stop to insertion.
+- Replace selected text, insert at a caret, and verify surrounding text survives.
+- Change focus, type, or move the caret during transcription: insertion must be skipped.
+- Correct one name twice in the same app/language, wait for a stable edit, then switch focus; check Vocabulary and the next dictation. Edits outside the span must not be learned.
+- Change Maximum recording, reopen the app and verify it persists; check the overlay uses that duration.
+- Enable Press Enter after dictation for a local scratch editor and verify text precedes a single newline; disable it and verify no newline. Check a different app stays disabled and that cancelled/focus-changed/partial insertion does not press Enter. Do not use a real chat for an unattended send test.
+- Enable quiet-pause stopping, speak, pause for the configured delay, and verify automatic insertion. Resume speaking before the delay and verify recording continues. Disable it and verify pauses do not finish recording.
+- Teach a name explicitly, restart, and dictate it in another app; review the Speech profile and language totals.
+- Verify a password field is blocked and an unsupported field retains a copyable transcript.
+- Test Accessibility/microphone denied, a hotkey conflict, and optional paste with a clipboard change.
+
+These require permissions and real target apps. Source tests and audio inference do not replace those checks.

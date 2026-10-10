@@ -1,0 +1,425 @@
+import AppKit
+import ApplicationServices
+import Carbon
+import SwiftUI
+import Observation
+import FlowCore
+
+@MainActor
+final class DictationTriggers {
+    var onToggle: (() -> Void)?
+    var onCancel: (() -> Void)?
+    var middleEnabled = true
+    private var hotkey: EventHotKeyRef?
+    private var handler: EventHandlerRef?
+    private var tap: CFMachPort?
+    private var source: CFRunLoopSource?
+    var hotkeyError: String?
+    var mouseAvailable: Bool { tap != nil }
+
+    func register() {
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        if handler == nil {
+            var event = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+            InstallEventHandler(GetApplicationEventTarget(), { _, _, pointer in
+                guard let pointer else { return OSStatus(eventNotHandledErr) }
+                MainActor.assumeIsolated {
+                    Unmanaged<DictationTriggers>.fromOpaque(pointer).takeUnretainedValue().onToggle?()
+                }
+                return noErr
+            }, 1, &event, context, &handler)
+            let status = RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), EventHotKeyID(signature: 0x57464C57, id: 1), GetApplicationEventTarget(), 0, &hotkey)
+            if status != noErr { hotkeyError = "⌥Space is unavailable (\(status)). Another app may be using it." }
+        }
+        guard tap == nil, AXIsProcessTrusted() else { return }
+        let mask = (CGEventMask(1) << CGEventType.otherMouseDown.rawValue) | (CGEventMask(1) << CGEventType.otherMouseUp.rawValue) | (CGEventMask(1) << CGEventType.keyDown.rawValue)
+        tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
+            eventsOfInterest: mask, callback: { _, type, event, pointer in
+                guard let pointer else { return Unmanaged.passUnretained(event) }
+                let consumed = MainActor.assumeIsolated {
+                    let owner = Unmanaged<DictationTriggers>.fromOpaque(pointer).takeUnretainedValue()
+                    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                        if let tap = owner.tap { CGEvent.tapEnable(tap: tap, enable: true) }
+                    }
+                    if owner.middleEnabled && (type == .otherMouseDown || type == .otherMouseUp) && event.getIntegerValueField(.mouseEventButtonNumber) == 2 {
+                        if type == .otherMouseDown { owner.onToggle?() }
+                        return true
+                    }
+                    if type == .keyDown && event.getIntegerValueField(.keyboardEventKeycode) == 53 { owner.onCancel?() }
+                    return false
+                }
+                return consumed ? nil : Unmanaged.passUnretained(event)
+            }, userInfo: context)
+        if let tap {
+            source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+            CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+            CGEvent.tapEnable(tap: tap, enable: true)
+        }
+    }
+}
+
+@MainActor
+struct TextTarget {
+    let app: NSRunningApplication
+    let element: AXUIElement?
+    let value: String?
+    let selection: CFRange?
+    let secure: Bool
+    var appName: String { app.localizedName ?? "Unknown app" }
+    var bundleID: String { app.bundleIdentifier ?? "unknown" }
+    var screen: NSScreen? {
+        let root = AXUIElementCreateApplication(app.processIdentifier)
+        guard let rawWindow = Self.attribute(root, kAXFocusedWindowAttribute), CFGetTypeID(rawWindow) == AXUIElementGetTypeID() else { return nil }
+        let window = rawWindow as! AXUIElement
+        guard let rawPosition = Self.attribute(window, kAXPositionAttribute), CFGetTypeID(rawPosition) == AXValueGetTypeID(),
+              let rawSize = Self.attribute(window, kAXSizeAttribute), CFGetTypeID(rawSize) == AXValueGetTypeID() else { return nil }
+        var position = CGPoint.zero, size = CGSize.zero
+        guard AXValueGetValue(rawPosition as! AXValue, .cgPoint, &position),
+              AXValueGetValue(rawSize as! AXValue, .cgSize, &size),
+              position.x.isFinite, position.y.isFinite, size.width.isFinite, size.height.isFinite else { return nil }
+        // AX coordinates start at the primary display's top-left; AppKit starts at its bottom-left.
+        let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
+        let center = NSPoint(x: position.x + size.width / 2, y: primaryTop - position.y - size.height / 2)
+        return NSScreen.screens.first { $0.frame.contains(center) }
+    }
+
+    static func capture() -> TextTarget? {
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return nil }
+        let root = AXUIElementCreateApplication(app.processIdentifier)
+        var focused: CFTypeRef?
+        AXUIElementCopyAttributeValue(root, kAXFocusedUIElementAttribute as CFString, &focused)
+        guard let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else {
+            return TextTarget(app: app, element: nil, value: nil, selection: nil, secure: false)
+        }
+        let element = focused as! AXUIElement
+        let secure = attribute(element, kAXSubroleAttribute) as? String == kAXSecureTextFieldSubrole
+        guard !secure else { return TextTarget(app: app, element: element, value: nil, selection: nil, secure: true) }
+        let raw = attribute(element, kAXSelectedTextRangeAttribute)
+            ?? (attribute(element, kAXSelectedTextRangesAttribute) as? [AXValue]).flatMap { $0.count == 1 ? $0.first : nil }
+        var range: CFRange?
+        if let raw, CFGetTypeID(raw) == AXValueGetTypeID() {
+            var result = CFRange()
+            if AXValueGetValue(raw as! AXValue, .cfRange, &result) { range = result }
+        }
+        return TextTarget(app: app, element: element, value: textValue(element), selection: range, secure: false)
+    }
+
+    static func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
+        return value
+    }
+
+    static func textValue(_ element: AXUIElement) -> String? {
+        guard attribute(element, kAXSubroleAttribute) as? String != kAXSecureTextFieldSubrole else { return nil }
+        if let value = attribute(element, kAXValueAttribute) as? String, !value.isEmpty { return value }
+        let role = attribute(element, kAXRoleAttribute) as? String
+        guard [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role ?? ""),
+              let count = attribute(element, kAXNumberOfCharactersAttribute) as? Int, count >= 0, count <= 100_000 else {
+            return attribute(element, kAXValueAttribute) as? String
+        }
+        if count == 0 { return "" }
+        var range = CFRange(location: 0, length: count)
+        guard let parameter = AXValueCreate(.cfRange, &range) else { return nil }
+        for name in [kAXStringForRangeParameterizedAttribute, kAXAttributedStringForRangeParameterizedAttribute] {
+            var result: CFTypeRef?
+            if AXUIElementCopyParameterizedAttributeValue(element, name as CFString, parameter, &result) == .success {
+                if let string = result as? String { return string }
+                if let string = result as? NSAttributedString { return string.string }
+            }
+        }
+        return nil
+    }
+
+    var stillFocused: Bool {
+        guard let current = Self.capture(), current.app.processIdentifier == app.processIdentifier, !current.secure,
+              let element, let currentElement = current.element else { return false }
+        return CFEqual(element, currentElement)
+    }
+
+    func insert(_ text: String, allowPaste: Bool, pressEnter: Bool = false) async -> (status: String, anchor: SpanAnchor?) {
+        guard !Task.isCancelled else { return ("Cancelled", nil) }
+        guard !text.isEmpty else { return ("Saved — no text to insert", nil) }
+        guard !secure, stillFocused, let element else { return ("Saved — target changed", nil) }
+        // A caret move or typing while decoding invalidates the insertion target.
+        let current = Self.capture()
+        guard current?.value == value, current?.selection?.location == selection?.location,
+              current?.selection?.length == selection?.length else { return ("Saved — field changed", nil) }
+        let expected = expectedValue(text)
+        let role = Self.attribute(element, kAXRoleAttribute) as? String
+        let textInput = [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role ?? "")
+        // Normal text input reaches web editors' input handlers. An AX setter can report
+        // success even when a Chromium editor does not change its document.
+        if textInput, CGPreflightPostEventAccess(), let source = CGEventSource(stateID: .privateState) {
+            let units = Array(text.utf16)
+            var offset = 0
+            while offset < units.count {
+                guard stillFocused else { return ("Typing stopped — focus changed", nil) }
+                var end = min(offset + 20, units.count)
+                // Keep a surrogate pair in the same event, including emoji.
+                if end < units.count, (0xD800...0xDBFF).contains(units[end - 1]) { end -= 1 }
+                guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
+                      let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else {
+                    return (offset == 0 ? "Saved — text input unavailable" : "Typing stopped — text input unavailable", nil)
+                }
+                Array(units[offset..<end]).withUnsafeBufferPointer { buffer in
+                    down.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
+                    up.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
+                }
+                down.flags = []; up.flags = []
+                // Deliver only to the captured app, even if another app activates during delivery.
+                down.postToPid(app.processIdentifier); up.postToPid(app.processIdentifier)
+                offset = end
+            }
+            // Once any text event is sent, never retry via AX or paste: delivery may be partial.
+            let anchor = await verifiedAnchor(text, expected: expected)
+            return await completeDelivery(text: text, status: anchor != nil ? "Inserted via typing" : "Text input sent — unverified", anchor: anchor, expected: expected, pressEnter: pressEnter, allowUnverified: true)
+        }
+        var settable = DarwinBoolean(false)
+        let canWrite = AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable) == .success && settable.boolValue
+        if canWrite {
+            let status = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString)
+            if status == .success {
+                let anchor = await verifiedAnchor(text, expected: expected)
+                return await completeDelivery(text: text, status: anchor != nil ? "Inserted" : "Sent to field — unverified", anchor: anchor, expected: expected, pressEnter: pressEnter)
+            }
+        }
+        guard allowPaste, stillFocused else { return ("Saved — use Copy", nil) }
+        guard CGPreflightPostEventAccess(), let source = CGEventSource(stateID: .privateState),
+              let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false) else {
+            return ("Saved — paste unavailable", nil)
+        }
+        // Optional clipboard fallback. Restore only if no one else changed the clipboard.
+        let clipboard = NSPasteboard.general
+        let previous = (clipboard.pasteboardItems ?? []).map { item in
+            item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+        }
+        guard stillFocused else { return ("Saved — target changed", nil) }
+        clipboard.clearContents()
+        clipboard.setString(text, forType: .string)
+        let changeCount = clipboard.changeCount
+        let pasteSent = stillFocused
+        if pasteSent {
+            down.flags = .maskCommand; up.flags = .maskCommand
+            down.postToPid(app.processIdentifier); up.postToPid(app.processIdentifier)
+        }
+        try? await Task.sleep(for: .milliseconds(350))
+        if clipboard.changeCount == changeCount {
+            clipboard.clearContents()
+            let items = previous.map { values in
+                let item = NSPasteboardItem()
+                for (type, data) in values { item.setData(data, forType: type) }
+                return item
+            }
+            clipboard.writeObjects(items)
+        }
+        guard pasteSent else { return ("Saved — target changed", nil) }
+        let anchor = await verifiedAnchor(text, expected: expected)
+        return await completeDelivery(text: text, status: anchor != nil ? "Inserted via paste" : "Paste sent — unverified", anchor: anchor, expected: expected, pressEnter: pressEnter, allowUnverified: true)
+    }
+
+    /// Called only after the entire text operation has been dispatched, never a partial edit.
+    private func completeDelivery(text: String, status: String, anchor: SpanAnchor?, expected: (value: String, prefix: String, suffix: String)?, pressEnter: Bool, allowUnverified: Bool = false) async -> (status: String, anchor: SpanAnchor?) {
+        guard pressEnter else { return (status, anchor) }
+        guard anchor != nil || allowUnverified else { return (status + " · Enter skipped — text not confirmed", anchor) }
+        // Allow the editor to process its queued text input before the Return event.
+        try? await Task.sleep(for: .milliseconds(150))
+        guard !Task.isCancelled, stillFocused else { return (status + " · Enter skipped — target changed", anchor) }
+        if let element, let currentValue = Self.textValue(element) {
+            let confirmed = expected.map { currentValue == $0.value }
+                ?? value.map { TextProcessing.isExactInsertion(before: $0, after: currentValue, inserted: text) } ?? false
+            if !confirmed {
+                return (status + " · Enter skipped — field changed", anchor)
+            }
+        }
+        guard CGPreflightPostEventAccess(), let source = CGEventSource(stateID: .privateState),
+              let down = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_Return), keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_Return), keyDown: false), stillFocused else {
+            return (status + " · Enter unavailable", anchor)
+        }
+        down.flags = []; up.flags = []
+        down.postToPid(app.processIdentifier); up.postToPid(app.processIdentifier)
+        // Enter may submit/clear the field; do not watch it as a recognition correction.
+        return (status + " · Enter pressed", nil)
+    }
+
+    private func verifiedAnchor(_ text: String, expected: (value: String, prefix: String, suffix: String)?) async -> SpanAnchor? {
+        guard let element, let expected else { return nil }
+        for _ in 0..<8 {
+            try? await Task.sleep(for: .milliseconds(50))
+            guard stillFocused else { return nil }
+            if Self.textValue(element) == expected.value {
+                return SpanAnchor(element: element, target: self, prefix: expected.prefix, suffix: expected.suffix, inserted: text)
+            }
+        }
+        return nil
+    }
+
+    private func expectedValue(_ text: String) -> (value: String, prefix: String, suffix: String)? {
+        guard let value, let selection, selection.location >= 0, selection.length >= 0,
+              selection.location <= value.utf16.count, selection.length <= value.utf16.count - selection.location else { return nil }
+        let string = value as NSString
+        let prefix = string.substring(to: selection.location)
+        let suffix = string.substring(from: selection.location + selection.length)
+        return (prefix + text + suffix, prefix, suffix)
+    }
+}
+
+@MainActor
+struct SpanAnchor {
+    let element: AXUIElement
+    let target: TextTarget
+    let prefix: String
+    let suffix: String
+    let inserted: String
+}
+
+@Observable @MainActor
+private final class RecordingDisplay {
+    var title = "Listening"
+    var detail = ""
+    var level: Float = 0
+    var elapsed = 0.0
+    var maximumSeconds = 180.0
+    var remaining: Double?
+    var levels = Array(repeating: Float(0), count: 24)
+    var middleMouse = true
+    var notchDepth: CGFloat = 0
+    var presented = false
+}
+
+private struct ListeningOverlay: View {
+    let display: RecordingDisplay
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+    var body: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: display.title == "Listening" ? "mic.fill" : "waveform")
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(.mint)
+                    .frame(width: 30, height: 30).background(.mint.opacity(0.12), in: Circle())
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(display.title).font(.system(size: 13, weight: .semibold))
+                    Text(display.detail).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                if display.title == "Listening" {
+                    Text("\(Duration.seconds(display.elapsed).formatted(.time(pattern: .minuteSecond))) / \(Duration.seconds(display.maximumSeconds).formatted(.time(pattern: .minuteSecond)))")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced)).monospacedDigit()
+                } else { ProgressView().controlSize(.mini) }
+            }
+            if display.title == "Listening" {
+                HStack(alignment: .center, spacing: 3) {
+                    ForEach(display.levels.indices, id: \.self) { index in
+                        Capsule().fill(.mint.opacity(0.35 + Double(display.levels[index]) * 0.65))
+                            .frame(width: 4, height: max(3, CGFloat(display.levels[index]) * 23))
+                    }
+                    Spacer(minLength: 12)
+                    HStack(spacing: 5) {
+                        if let remaining = display.remaining, remaining < 4.5 {
+                            Text("Finishing in \(Int(ceil(remaining)))s")
+                        } else {
+                            if display.middleMouse {
+                                Image(systemName: "computermouse")
+                                    .overlay(alignment: .top) {
+                                        Capsule().fill(.mint).frame(width: 2, height: 4).offset(y: 2)
+                                    }
+                                    .accessibilityLabel("Middle mouse button")
+                            } else { Text("⌥Space").fontWeight(.semibold) }
+                            Text("to finish")
+                        }
+                    }.font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                }.frame(height: 25)
+                    .animation(reduceMotion ? nil : .linear(duration: 0.05), value: display.levels)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityValue("Microphone level: \(Int(display.level * 100)) percent")
+                GeometryReader { geometry in
+                    Capsule().fill(.primary.opacity(0.07))
+                    Capsule().fill(.mint.opacity(0.65))
+                        .frame(width: geometry.size.width * min(1, display.elapsed / display.maximumSeconds))
+                }.frame(height: 2).accessibilityHidden(true)
+            }
+        }.padding(16)
+            .padding(.top, display.notchDepth)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background {
+                if display.notchDepth > 0 {
+                    UnevenRoundedRectangle(bottomLeadingRadius: 22, bottomTrailingRadius: 22).fill(.black)
+                } else {
+                    RoundedRectangle(cornerRadius: 19).fill(.regularMaterial)
+                        .overlay(RoundedRectangle(cornerRadius: 19).strokeBorder(.primary.opacity(0.08), lineWidth: 1))
+                }
+            }
+            .environment(\.colorScheme, display.notchDepth > 0 ? .dark : colorScheme)
+            .scaleEffect(x: display.presented || reduceMotion ? 1 : 0.7,
+                         y: display.presented || reduceMotion ? 1 : 0.02,
+                         anchor: display.notchDepth > 0 ? .top : .bottom)
+            .opacity(display.presented ? 1 : 0)
+            .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.32, dampingFraction: 1), value: display.presented)
+    }
+}
+
+@MainActor
+final class RecordingPanel {
+    private var panel: NSPanel?
+    private let display = RecordingDisplay()
+    private var dismissal: Task<Void, Never>?
+    func show(title: String, detail: String, maximumSeconds: Double = 180, middleMouse: Bool = true, screen targetScreen: NSScreen? = nil) {
+        dismissal?.cancel(); dismissal = nil
+        if panel == nil {
+            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 350, height: 128), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.level = .floating; panel.isOpaque = false; panel.backgroundColor = .clear
+            panel.hasShadow = true; panel.ignoresMouseEvents = true
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            panel.contentView = NSHostingView(rootView: ListeningOverlay(display: display))
+            self.panel = panel
+        }
+        display.title = title; display.detail = detail
+        if title == "Listening" {
+            display.middleMouse = middleMouse
+            display.maximumSeconds = maximumSeconds
+            display.level = 0; display.elapsed = 0; display.remaining = nil
+            display.levels = Array(repeating: 0, count: 24)
+        }
+        let screen = targetScreen ?? NSScreen.main ?? NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.screens.first
+        if (panel?.isVisible != true || title == "Listening"), let panel, let screen {
+            // Prefer the captured target window's display; the mouse can be on another display.
+            let screenID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+            let builtIn = screenID.map { CGDisplayIsBuiltin($0.uint32Value) != 0 } ?? false
+            let left = screen.auxiliaryTopLeftArea, right = screen.auxiliaryTopRightArea
+            let hasNotch = builtIn && screen.safeAreaInsets.top > 0 && left != nil && right != nil
+            display.notchDepth = hasNotch ? screen.safeAreaInsets.top : 0
+            let width = hasNotch ? max(350, right!.minX - left!.maxX + 32) : 350
+            let height = 128 + display.notchDepth
+            let centerX = hasNotch ? (left!.maxX + right!.minX) / 2 : screen.visibleFrame.midX
+            let bottom = hasNotch ? screen.frame.maxY - height : screen.visibleFrame.minY + 30
+            panel.setFrame(NSRect(x: centerX - width / 2, y: bottom, width: width, height: height), display: true)
+            panel.level = hasNotch ? .statusBar : .floating
+            panel.orderFrontRegardless()
+            // Let the persistent hosting view commit the collapsed shape before expansion.
+            Task { @MainActor [weak self] in
+                await Task.yield()
+                guard let self, self.panel?.isVisible == true, self.dismissal == nil else { return }
+                self.display.presented = true
+            }
+        } else {
+            display.presented = true
+        }
+    }
+    func update(level: Float, elapsed: Double, remaining: Double?) {
+        display.level = level; display.elapsed = elapsed; display.remaining = remaining
+        display.levels.removeFirst(); display.levels.append(level)
+    }
+    func hide() {
+        display.presented = false
+        dismissal?.cancel()
+        dismissal = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
+            guard !Task.isCancelled else { return }
+            self?.panel?.orderOut(nil)
+            self?.dismissal = nil
+        }
+    }
+}

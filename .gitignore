@@ -1,0 +1,19 @@
+.build/
+dist/
+.DS_Store
+.swiftpm/
+.verification/
+# Local audio, history, model downloads, and signing material never belong in Git.
+.env
+.env.*
+*.pem
+*.p12
+*.key
+*.keychain-db
+keychain-password
+history.json
+Models/
+Tokenizer/
+*.wav
+*.aiff
+*.m4a

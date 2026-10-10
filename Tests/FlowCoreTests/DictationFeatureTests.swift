@@ -1,0 +1,119 @@
+import Foundation
+import Testing
+import FlowCore
+
+@Test func correctionsSurviveRestartAndStayInTheirAppAndLanguage() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let store = DiskStore(url: folder.appendingPathComponent("history.json"))
+    var data = try store.load()
+    let record = Dictation(original: "Send this to Acmey tomorrow.", text: "Send this to Acmey tomorrow.", appName: "Notes", bundleID: "notes", language: "en", audioSeconds: 3, processingSeconds: 0.3, delivery: "Inserted")
+    data.dictations.append(record)
+    data.learn(original: record.text, edited: "Send this to Acme tomorrow.", bundleID: "notes", language: "en")
+    #expect(data.corrections.first?.enabled == false)
+    data.learn(original: "Ask Acmey for an update.", edited: "Ask Acme for an update.", bundleID: "notes", language: "en")
+    try store.save(data)
+    let restored = try store.load()
+    #expect(restored.dictations.first?.id == record.id)
+    #expect(TextProcessing.clean("Contact Acmey and Acmeville.", corrections: restored.corrections, bundleID: "notes", language: "en", spokenPunctuation: false) == "Contact Acme and Acmeville.")
+    #expect(TextProcessing.clean("Contact Acmey.", corrections: restored.corrections, bundleID: "mail", language: "en", spokenPunctuation: false) == "Contact Acmey.")
+    #expect(TextProcessing.clean("Contact Acmey.", corrections: restored.corrections, bundleID: "notes", language: "nl", spokenPunctuation: false) == "Contact Acmey.")
+    var chain = restored.corrections
+    chain.append(Correction(from: "Acme", to: "Another name", bundleID: "notes", language: "en", observations: 2, enabled: true))
+    #expect(TextProcessing.clean("Acmey and Acme", corrections: chain, bundleID: "notes", language: "en", spokenPunctuation: false) == "Acme and Another name")
+    data.corrections[0].enabled = false
+    data.corrections[0].userDisabled = true
+    data.learn(original: "Ask acmey for an update.", edited: "Ask Acme for an update.", bundleID: "notes", language: "en")
+    #expect(data.corrections.count == 1)
+    #expect(data.corrections[0].enabled == false)
+    let attributes = try FileManager.default.attributesOfItem(atPath: store.url.path)
+    #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+}
+
+@Test func learningExcludesEditsOutsideTheDictatedSpanAndAmbiguousRewrites() {
+    let prefix = "Existing private text 👋\n"
+    let suffix = "\nKeep this untouched."
+    let edited = TextProcessing.editedSpan(value: prefix + "Stuur dit naar Acme morgen." + suffix, prefix: prefix, suffix: suffix)
+    #expect(edited == "Stuur dit naar Acme morgen.")
+    #expect(TextProcessing.editedSpan(value: "Changed private text\nStuur dit naar Acme morgen." + suffix, prefix: prefix, suffix: suffix) == nil)
+    #expect(TextProcessing.correction(original: "Send this tomorrow.", edited: "Send this tomorrow. Also add another paragraph.") == nil)
+    #expect(TextProcessing.correction(original: "Send this to Acmey tomorrow.", edited: "") == nil)
+    #expect(TextProcessing.correction(original: "Acmey", edited: "A new message", requireSharedContext: true) == nil)
+    #expect(TextProcessing.correction(original: "Contact Acmey tomorrow.", edited: "Contact Acme tomorrow.", requireSharedContext: true)?.to == "Acme")
+    var data = FlowData()
+    for _ in 0..<2 { data.learn(original: "Mail Acmey today.", edited: "Mail Acme today.", bundleID: "mail", language: "en") }
+    data.learn(original: "Mail Acmey today.", edited: "Mail Canon today.", bundleID: "mail", language: "en")
+    #expect(data.corrections.allSatisfy { !$0.enabled })
+}
+
+@Test func dutchSpokenPunctuationAndCorrectionsPreserveUnicodeAndLiteralVocabulary() {
+    let rules = [Correction(from: "acmey", to: "Acme $1", bundleID: "notes", language: "nl", observations: 2, enabled: true)]
+    let result = TextProcessing.clean("Hallo Éline komma stuur dit naar acmey nieuwe alinea Tot morgen!", corrections: rules, bundleID: "notes", language: "nl", spokenPunctuation: true)
+    #expect(result == "Hallo Éline, stuur dit naar Acme $1\n\nTot morgen!")
+    #expect(TextProcessing.clean("We discussed a new line of products.", corrections: [], bundleID: "mail", language: "en", spokenPunctuation: false) == "We discussed a new line of products.")
+}
+
+@Test func taughtNamesApplyAcrossAppsAndOverrideOlderAutomaticGuesses() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let store = DiskStore(url: folder.appendingPathComponent("history.json"))
+    var data = FlowData()
+    let taught = data.teach(from: "acmey", to: "Acme")
+    let empty = data.teach(from: "", to: "Acme")
+    let unchanged = data.teach(from: "Acme", to: "Acme")
+    let dutchName = data.teach(from: "eline", to: "Éline", language: "nl")
+    #expect(taught && dutchName)
+    #expect(!empty && !unchanged)
+    data.corrections.append(Correction(from: "acmey", to: "Acmey Consulting", bundleID: "mail", language: "en", observations: 2, enabled: true))
+    try store.save(data)
+    let restored = try store.load()
+    #expect(TextProcessing.clean("Mail acmey and Acmeville.", corrections: restored.corrections, bundleID: "codex", language: "en", spokenPunctuation: false) == "Mail Acme and Acmeville.")
+    #expect(TextProcessing.clean("Mail acmey.", corrections: restored.corrections, bundleID: "mail", language: "en", spokenPunctuation: false) == "Mail Acme.")
+    #expect(TextProcessing.clean("Vraag eline bij acmey.", corrections: restored.corrections, bundleID: "claude", language: "nl", spokenPunctuation: false) == "Vraag Éline bij Acme.")
+    #expect(TextProcessing.clean("Ask eline.", corrections: restored.corrections, bundleID: "claude", language: "en", spokenPunctuation: false) == "Ask eline.")
+}
+
+@Test(arguments: [60.0, 180.0, 600.0, 1800.0])
+func quietPauseStoppingWaitsForSpeechRespectsToggleAndHonorsTheChosenRecordingLimit(limit: Double) {
+    var activity = RecordingActivity(maximumSeconds: limit)
+    activity.append(rms: 0, duration: 10)
+    #expect(!activity.shouldStop(silenceEnabled: true, delay: 5))
+    activity.append(rms: 0.03, duration: 0.3)
+    activity.append(rms: 0, duration: 4.9)
+    #expect(!activity.shouldStop(silenceEnabled: true, delay: 5))
+    activity.append(rms: 0.03, duration: 0.1) // Speech resumes: restart the pause countdown.
+    activity.append(rms: 0, duration: 5.1)
+    #expect(activity.shouldStop(silenceEnabled: true, delay: 5))
+    #expect(!activity.shouldStop(silenceEnabled: false, delay: 5))
+    #expect(!activity.shouldStop(silenceEnabled: true, delay: 8))
+    activity.append(rms: 0, duration: limit - activity.seconds - 0.01)
+    #expect(!activity.shouldStop(silenceEnabled: false, delay: 5))
+    activity.append(rms: 0, duration: 0.02)
+    #expect(activity.shouldStop(silenceEnabled: false, delay: 5))
+}
+
+@Test func speechProfileUsesRetainedDictationsAndExcludesImportedAudio() {
+    func record(_ text: String, language: String, app: String = "notes") -> Dictation {
+        Dictation(original: text, text: text, appName: "Notes", bundleID: app, language: language, audioSeconds: 6, processingSeconds: 0.2, delivery: "Inserted")
+    }
+    let english = record("Um you know this name.", language: "en")
+    var dutch = record("Euh stuur dit naar Acmey.", language: "nl")
+    dutch.corrected = "Euh stuur dit naar Acme."
+    let profile = SpeechProfile(records: [english, dutch, record("uh uh uh", language: "en", app: "import")])
+    #expect(profile.recordings.count == 2)
+    #expect(profile.words == 10)
+    #expect(profile.pace == 50)
+    #expect(profile.correctedCount == 1)
+    #expect(profile.languages.first?.name == "en")
+    #expect(profile.phrases.first(where: { $0.name == "you know" })?.count == 1)
+    #expect(!profile.phrases.contains(where: { $0.name == "uh" }))
+}
+
+@Test func enterReadbackAcceptsOnlyTheFullInsertionAndPreservesExistingText() {
+    #expect(TextProcessing.isExactInsertion(before: "", after: "Hello Éline 👋", inserted: "Hello Éline 👋"))
+    #expect(TextProcessing.isExactInsertion(before: "Existing text.", after: "Existing text. Hello Éline 👋", inserted: " Hello Éline 👋"))
+    #expect(TextProcessing.isExactInsertion(before: "Say hello then goodbye.", after: "Say hello then hello goodbye.", inserted: "hello "))
+    #expect(!TextProcessing.isExactInsertion(before: "", after: "Hello É", inserted: "Hello Éline 👋"))
+    #expect(!TextProcessing.isExactInsertion(before: "Existing text.", after: "Changed text. Hello Éline 👋", inserted: " Hello Éline 👋"))
+    #expect(!TextProcessing.isExactInsertion(before: "Hello Éline 👋", after: "Hello Éline 👋", inserted: "Hello Éline 👋"))
+}

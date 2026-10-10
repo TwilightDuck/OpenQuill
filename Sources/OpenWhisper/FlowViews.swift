@@ -1,0 +1,450 @@
+import SwiftUI
+import Charts
+import FlowCore
+
+enum FlowPage: String, CaseIterable, Identifiable {
+    case dictate = "Dictate", history = "History", statistics = "Statistics", profile = "Speech profile", vocabulary = "Vocabulary", settings = "Settings"
+    var id: String { rawValue }
+    var icon: String {
+        switch self {
+        case .dictate: "waveform"
+        case .history: "clock.arrow.circlepath"
+        case .statistics: "chart.bar.xaxis"
+        case .profile: "person.crop.circle"
+        case .vocabulary: "text.book.closed"
+        case .settings: "slider.horizontal.3"
+        }
+    }
+}
+
+struct FlowWindow: View {
+    @Bindable var state: AppState
+    @State private var page: FlowPage? = .dictate
+    var body: some View {
+        NavigationSplitView {
+            List(selection: $page) {
+                ForEach(FlowPage.allCases) { item in Label(item.rawValue, systemImage: item.icon).tag(item) }
+            }
+            .navigationSplitViewColumnWidth(min: 175, ideal: 190, max: 220)
+            .safeAreaInset(edge: .bottom) {
+                Label("Everything stays on this Mac", systemImage: "lock.shield")
+                    .font(.caption).foregroundStyle(.secondary).padding(18)
+            }
+        } detail: {
+            VStack(spacing: 0) {
+                if let notice = state.notice {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "info.circle").foregroundStyle(.orange)
+                        Text(notice).font(.callout).textSelection(.enabled)
+                        Spacer()
+                        Button { state.notice = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel("Dismiss message")
+                    }.padding(14).background(.orange.opacity(0.08))
+                }
+                switch page ?? .dictate {
+                case .dictate: DictateView(state: state, openSettings: { page = .settings })
+                case .history: HistoryView(state: state)
+                case .statistics: StatisticsView(state: state)
+                case .profile: SpeechProfileView(state: state)
+                case .vocabulary: VocabularyView(state: state)
+                case .settings: FlowSettingsView(state: state)
+                }
+            }
+            .navigationTitle(page?.rawValue ?? "Dictate")
+        }
+        .tint(Color.flowAccent)
+        .frame(minWidth: 820, minHeight: 590)
+    }
+}
+
+struct DictateView: View {
+    @Bindable var state: AppState
+    let openSettings: () -> Void
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                HStack {
+                    Label(state.modelReady ? "Local model ready" : (state.modelBusy ? "Preparing local model…" : "Setup needed"), systemImage: state.modelReady ? "checkmark.circle.fill" : "arrow.down.circle")
+                        .font(.callout).foregroundStyle(state.modelReady ? Color.flowAccent : Color.secondary)
+                    Spacer()
+                    Picker("Language", selection: $state.preferences.language) { languageOptions }
+                        .labelsHidden().frame(width: 145).disabled(state.phase != .idle)
+                }
+                VStack(spacing: 18) {
+                    Image(systemName: "waveform").font(.system(size: 46, weight: .light)).foregroundStyle(Color.flowAccent).accessibilityHidden(true)
+                    Text(state.phase == .idle ? "Speak your mind." : state.phase.title).font(.system(size: 34, weight: .semibold, design: .rounded)).tracking(-0.8)
+                    Text(state.phase == .recording ? "\(Int(state.elapsed))s of \(state.recordingLimitLabel) · click again to finish" : "Click your middle mouse button. Speak. Click again.")
+                        .font(.body).foregroundStyle(.secondary)
+                    HStack(spacing: 12) {
+                        Label("Middle mouse", systemImage: "computermouse").padding(.horizontal, 12).padding(.vertical, 8).background(.quaternary, in: Capsule())
+                        Text("or ⌥Space").foregroundStyle(.secondary)
+                    }.font(.callout)
+                    if state.phase == .processing || state.phase == .starting || state.phase == .cancelling { ProgressView().controlSize(.small) }
+                    if state.phase == .recording {
+                        ProgressView(value: Double(state.level)).tint(Color.flowAccent).frame(width: 220)
+                        if let remaining = state.silenceRemaining, remaining < 4.5 { Text("Finishing after silence in \(Int(ceil(remaining)))s").font(.caption).foregroundStyle(.secondary) }
+                    }
+                    if !state.modelReady { Button("Set up dictation", action: openSettings).buttonStyle(.borderedProminent) }
+                    if state.phase != .idle && state.phase != .inserting { Button("Cancel", action: state.cancel).keyboardShortcut(.cancelAction) }
+                }
+                .frame(maxWidth: .infinity).padding(.vertical, 38)
+                .background(LinearGradient(colors: [Color.flowAccent.opacity(0.10), Color.flowAccent.opacity(0.025)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 24))
+                .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(Color.flowAccent.opacity(0.12), lineWidth: 1))
+                HStack(spacing: 12) {
+                    ProfileMetric(title: "Words captured", value: state.totalWords.formatted(), icon: "text.alignleft")
+                    ProfileMetric(title: "Personal terms", value: state.personalTerms.count.formatted(), icon: "text.book.closed")
+                    ProfileMetric(title: "Dictation limit", value: state.recordingLimitLabel, icon: "timer")
+                }
+                HStack(spacing: 10) {
+                    Image(systemName: "macwindow").foregroundStyle(.secondary)
+                    Text(state.currentApp).font(.callout)
+                    Spacer()
+                    Text(state.modelReady ? state.preferences.model.title : "Model not loaded").font(.caption).foregroundStyle(.secondary)
+                }
+                if !state.accessibility {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Allow text insertion").font(.headline)
+                            Text("Accessibility lets the middle button work and places text at your cursor.").font(.callout).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Allow access", action: state.requestAccessibility)
+                    }.padding(18).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
+                }
+                if !state.lastText.isEmpty {
+                    HStack { Text("Latest dictation").font(.headline); Spacer(); Button("Copy") { state.copy(state.lastText) } }
+                    Text(state.lastText).font(.body).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(18).background(.background, in: RoundedRectangle(cornerRadius: 12))
+                }
+                HStack {
+                    Text("Audio lives in memory and is discarded after transcription.").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Transcribe audio file…", action: state.transcribeFile).disabled(!state.modelReady || state.phase != .idle)
+                }
+            }.padding(30)
+        }
+    }
+}
+
+@ViewBuilder var languageOptions: some View {
+    Text("English").tag("en")
+    Text("Dutch / Flemish").tag("nl")
+    Text("Detect language").tag("auto")
+}
+
+struct HistoryView: View {
+    @Bindable var state: AppState
+    @State private var editing: Dictation?
+    @State private var editedText = ""
+    @State private var confirmClear = false
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                TextField("Search dictations or apps", text: $state.historySearch).textFieldStyle(.roundedBorder)
+                Button("Export…", action: state.exportHistory).disabled(state.data.dictations.isEmpty)
+                Button("Clear…") { confirmClear = true }.disabled(state.data.dictations.isEmpty)
+            }.padding(20)
+            if state.filteredHistory.isEmpty {
+                ContentUnavailableView("Your words will appear here", systemImage: "clock.arrow.circlepath", description: Text("Dictations are saved locally when history is enabled."))
+            } else {
+                List(state.filteredHistory) { record in
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text(record.appName).font(.headline)
+                            Text(record.language.uppercased()).font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            Text(record.date, format: .dateTime.month(.abbreviated).day().hour().minute()).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Text(record.corrected ?? record.text).textSelection(.enabled).font(.body)
+                        HStack(spacing: 14) {
+                            Text("\(record.wordCount) words · \(record.processingSeconds, specifier: "%.2f")s processing").font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Copy") { state.copy(record.corrected ?? record.text) }
+                            Button("Correct") { editing = record; editedText = record.corrected ?? record.text }
+                            Button { state.removeRecord(record.id) } label: { Image(systemName: "trash") }.accessibilityLabel("Delete dictation")
+                        }.buttonStyle(.borderless)
+                        DisclosureGroup("Transcription details") {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(record.delivery).foregroundStyle(.secondary)
+                                Text(record.original).textSelection(.enabled)
+                            }.font(.callout).padding(.top, 6)
+                        }
+                    }.padding(.vertical, 12)
+                }.listStyle(.inset)
+            }
+        }
+        .confirmationDialog("Delete all local dictation history?", isPresented: $confirmClear) { Button("Delete history", role: .destructive, action: state.clearHistory) }
+        .sheet(item: $editing) { record in
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Correct dictation").font(.title2.bold())
+                TextEditor(text: $editedText).font(.body).frame(height: 180).border(.quaternary)
+                Text("Short substitutions teach spelling and names. Seeing the same correction twice activates it for this app and language. You can also enable it immediately in Vocabulary.")
+                    .font(.callout).foregroundStyle(.secondary)
+                HStack { Spacer(); Button("Cancel") { editing = nil }; Button("Save correction") { state.correctRecord(record.id, text: editedText); editing = nil }.buttonStyle(.borderedProminent) }
+            }.padding(24).frame(width: 500)
+        }
+    }
+}
+
+struct StatisticsView: View {
+    let state: AppState
+    var days: [(date: Date, words: Int)] {
+        (0..<7).reversed().map { offset in
+            let day = Calendar.current.startOfDay(for: Calendar.current.date(byAdding: .day, value: -offset, to: Date())!)
+            return (day, state.data.dictations.filter { Calendar.current.isDate($0.date, inSameDayAs: day) }.reduce(0) { $0 + $1.wordCount })
+        }
+    }
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 28) {
+                HStack(spacing: 28) {
+                    metric("Words dictated", value: state.totalWords.formatted())
+                    metric("Speaking pace", value: "\(state.wordsPerMinute) wpm")
+                    metric("Average processing", value: String(format: "%.2fs", state.averageLatency))
+                }
+                Divider()
+                Text("Your week in words").font(.title3.bold())
+                Chart(days, id: \.date) { day in
+                    BarMark(x: .value("Day", day.date, unit: .day), y: .value("Words", day.words))
+                        .foregroundStyle(Color.flowAccent).cornerRadius(4)
+                }.chartXAxis { AxisMarks(values: .stride(by: .day)) { value in AxisValueLabel(format: .dateTime.weekday(.abbreviated)) } }
+                    .frame(height: 220)
+                    .accessibilityLabel("Dictated words per day for the last seven days")
+                HStack(spacing: 28) {
+                    metric("Dictations", value: state.data.dictations.count.formatted())
+                    metric("Active corrections", value: state.activeRules.formatted())
+                    metric("Estimated time saved", value: "\(max(0, Int(Double(state.totalWords) / 45 - state.totalAudio / 60))) min")
+                }
+                Text("Statistics cover your retained history. Time saved compares speaking time with typing at 45 words per minute. Processing measures model inference after recording ends.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if !state.data.dictations.isEmpty {
+                    Divider()
+                    Text("Where you dictate").font(.title3.bold())
+                    ForEach(Array(Dictionary(grouping: state.data.dictations, by: \.appName).map { ($0.key, $0.value.reduce(0) { $0 + $1.wordCount }) }.sorted { $0.1 > $1.1 }.prefix(6)), id: \.0) { app, words in
+                        HStack { Text(app); Spacer(); Text("\(words.formatted()) words").foregroundStyle(.secondary) }.font(.callout)
+                    }
+                }
+            }.padding(30)
+        }
+    }
+    func metric(_ title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) { Text(value).font(.system(size: 28, weight: .semibold, design: .rounded)).monospacedDigit(); Text(title).font(.callout).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, alignment: .leading).flowCard()
+    }
+}
+
+struct VocabularyView: View {
+    @Bindable var state: AppState
+    @State private var confirmClear = false
+    @State private var teaching = false
+    @State private var heard = ""
+    @State private var spelling = ""
+    @State private var language = "*"
+    @State private var invalid = false
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Make every name yours.").font(.system(size: 28, weight: .semibold, design: .rounded)).tracking(-0.6)
+                        Text("Teach the spelling once. Keep it on this Mac.").font(.callout).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Teach a name or term", systemImage: "plus") { teaching = true }.buttonStyle(.borderedProminent)
+                }
+                HStack(spacing: 12) {
+                    ProfileMetric(title: "Personal terms", value: state.personalTerms.count.formatted(), icon: "text.book.closed")
+                    ProfileMetric(title: "Active spelling rules", value: state.activeRules.formatted(), icon: "checkmark.circle")
+                }
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Recognition hints").font(.headline)
+                    Text("Names, products and technical terms, separated by commas. Whisper uses these during recognition. With Parakeet, use a spelling rule below to fix a name it mishears.").font(.callout).foregroundStyle(.secondary)
+                    TextEditor(text: $state.preferences.vocabulary).font(.body).frame(height: 80).padding(8)
+                        .background(.background, in: RoundedRectangle(cornerRadius: 10)).accessibilityLabel("Recognition hints")
+                }.flowCard()
+                HStack { Text("Spelling & corrections").font(.title3.bold()); Spacer(); Button("Reset…") { confirmClear = true }.disabled(state.data.corrections.isEmpty) }
+                Text("Automatic learning watches a verified field for one minute and activates short replacements after two observations. Editors that hide their text, including some Codex and Claude fields, need History → Correct or an explicit spelling rule. These are text rules, not speech model training.")
+                    .font(.callout).foregroundStyle(.secondary)
+                if state.data.corrections.isEmpty {
+                    ContentUnavailableView("Ready to learn your words", systemImage: "text.badge.plus", description: Text("Add a name above, or correct a transcript in History."))
+                }
+                ForEach(state.data.corrections) { rule in
+                    HStack(alignment: .top, spacing: 12) {
+                        Toggle("Use \(rule.from) correction", isOn: Binding(get: { rule.enabled }, set: { state.setRule(rule.id, enabled: $0) })).labelsHidden().toggleStyle(.switch).controlSize(.small)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("\(rule.from) → \(rule.to)").font(.headline).textSelection(.enabled)
+                            Text("\(rule.bundleID == "*" ? "All apps" : (state.preferences.apps.first { $0.bundleID == rule.bundleID }?.name ?? rule.bundleID)) · \(rule.language == "*" ? "All languages" : rule.language.uppercased()) · \(rule.observations == 0 ? "Taught by you" : "Observed \(rule.observations)×")")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button { state.removeRule(rule.id) } label: { Image(systemName: "trash") }.buttonStyle(.borderless).accessibilityLabel("Delete correction")
+                    }.flowCard()
+                }
+            }.padding(30)
+        }
+        .confirmationDialog("Delete all learned corrections?", isPresented: $confirmClear) { Button("Delete corrections", role: .destructive, action: state.clearLearning) }
+        .sheet(isPresented: $teaching) {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Teach a name or term").font(.title2.bold())
+                Text("Enter what the model writes and the spelling you want. This rule applies immediately across apps.").font(.callout).foregroundStyle(.secondary)
+                TextField("Heard as", text: $heard).textFieldStyle(.roundedBorder)
+                TextField("Write as", text: $spelling).textFieldStyle(.roundedBorder)
+                Picker("Language", selection: $language) { Text("All languages").tag("*"); Text("English").tag("en"); Text("Dutch / Flemish").tag("nl") }
+                if invalid { Text("Use two different names or short phrases, up to 128 characters each.").font(.caption).foregroundStyle(.red) }
+                HStack { Spacer(); Button("Cancel") { teaching = false }; Button("Save spelling") {
+                    if state.teachName(from: heard, to: spelling, language: language) { heard = ""; spelling = ""; invalid = false; teaching = false }
+                    else { invalid = true }
+                }.buttonStyle(.borderedProminent).disabled(heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || spelling.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+            }.padding(26).frame(width: 460)
+        }
+    }
+}
+
+struct SpeechProfileView: View {
+    @Bindable var state: AppState
+    var body: some View {
+        let profile = state.profile
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                Text("Your voice, over time.").font(.system(size: 28, weight: .semibold, design: .rounded)).tracking(-0.6)
+                Text("A private picture of your dictation habits, built from your saved transcripts.").font(.callout).foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    ProfileMetric(title: "Dictation pace", value: profile.words > 0 ? "\(profile.pace) wpm" : "—", icon: "speedometer")
+                    ProfileMetric(title: "Transcripts corrected", value: profile.correctedCount.formatted(), icon: "pencil.line")
+                    ProfileMetric(title: "Personal terms", value: state.personalTerms.count.formatted(), icon: "text.book.closed")
+                }
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Languages & dialect").font(.title3.bold())
+                    if profile.languages.isEmpty { Text("Language use appears after your first saved dictation.").foregroundStyle(.secondary) }
+                    ForEach(profile.languages, id: \.name) { item in
+                        VStack(spacing: 8) {
+                            HStack {
+                                Text(item.name == "en" ? "English" : item.name == "nl" ? "Dutch / Flemish" : item.name.uppercased())
+                                Spacer()
+                                Text("\(item.words.formatted()) words · \(profile.words > 0 ? Int(Double(item.words) / Double(profile.words) * 100) : 0)%").foregroundStyle(.secondary)
+                            }.font(.callout)
+                            ProgressView(value: Double(item.words), total: Double(max(1, profile.words))).tint(Color.flowAccent)
+                        }
+                    }
+                    Divider()
+                    TextField("My dialect or accent", text: Binding(get: { state.preferences.dialect ?? "" }, set: { state.preferences.dialect = $0 })).textFieldStyle(.roundedBorder)
+                    Text("For example: Flemish, West Flemish, or British English. This is your own description; it does not change the speech model. Automatic language detection distinguishes languages, not dialects.").font(.caption).foregroundStyle(.secondary)
+                }.flowCard()
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Phrases to reflect on").font(.title3.bold())
+                    if profile.phrases.isEmpty {
+                        Text("No selected filler phrases found in your saved transcripts yet.").font(.callout).foregroundStyle(.secondary)
+                    } else {
+                        ForEach(profile.phrases.prefix(6), id: \.name) { phrase in
+                            HStack { Text("“\(phrase.name)”"); Spacer(); Text("\(phrase.count)×").monospacedDigit().foregroundStyle(.secondary) }.font(.callout)
+                        }
+                        Text("For clearer phrasing, try a brief pause where you would normally use a filler. These phrases can also be useful in natural conversation.").font(.callout).foregroundStyle(.secondary)
+                    }
+                    Text("Speech models may remove fillers. These counts describe saved text; they are not a grammar, pronunciation or fluency score.").font(.caption).foregroundStyle(.secondary)
+                }.flowCard()
+                Text("Language totals follow the selected or detected dictation language. Pace includes pauses and uses transcript word counts. This profile excludes imported audio and follows retained history; deleting history changes these statistics. No audio recordings or voiceprints are stored.").font(.caption).foregroundStyle(.secondary)
+            }.padding(30)
+        }
+    }
+}
+
+private extension Color {
+    static var flowAccent: Color { Color(nsColor: .systemTeal) }
+}
+
+private extension View {
+    func flowCard() -> some View {
+        self.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+            .background(.background, in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.primary.opacity(0.06), lineWidth: 1))
+    }
+}
+
+private struct ProfileMetric: View {
+    let title: String
+    let value: String
+    let icon: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Image(systemName: icon).foregroundStyle(Color.flowAccent).font(.system(size: 16, weight: .medium))
+            Text(value).font(.system(size: 25, weight: .semibold, design: .rounded)).monospacedDigit()
+            Text(title).font(.caption).foregroundStyle(.secondary)
+        }.frame(maxWidth: .infinity, alignment: .leading).flowCard()
+    }
+}
+
+struct FlowSettingsView: View {
+    @Bindable var state: AppState
+    var body: some View {
+        Form {
+            Section("Local speech model") {
+                Picker("Model", selection: $state.preferences.model) { ForEach(SpeechModel.allCases) { Text($0.title).tag($0) } }.disabled(state.modelBusy || state.phase != .idle)
+                    .onChange(of: state.preferences.model) { _, _ in Task { await state.loadModel(download: false) } }
+                Text(state.preferences.model.detail).font(.callout).foregroundStyle(.secondary)
+                Text(state.modelStatus).font(.callout)
+                if state.modelBusy { ProgressView(); if state.progress > 0 { ProgressView(value: state.progress) } }
+                HStack {
+                    Button("Download model") { Task { await state.loadModel(download: true) } }.buttonStyle(.borderedProminent)
+                    Button("Load existing model") { Task { await state.loadModel(download: false) } }
+                }.disabled(state.modelBusy || state.phase != .idle)
+                Text("Downloads fetch free model files from Hugging Face. Loading and dictation use local files only. No account, subscription or API key.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Dictation") {
+                Toggle("Middle mouse button starts and stops dictation", isOn: $state.preferences.middleMouse)
+                LabeledContent("Keyboard fallback", value: "⌥Space")
+                LabeledContent("Middle mouse access", value: state.mouseAvailable ? "Available" : "Allow Accessibility, then refresh")
+                if let error = state.hotkeyError { Text(error).foregroundStyle(.orange) }
+                Picker("Default language", selection: $state.preferences.language) { languageOptions }
+                Toggle("Recognize spoken punctuation commands", isOn: $state.preferences.spokenPunctuation)
+                Text("For example: “new paragraph” or “nieuwe alinea”. Model punctuation is always preserved. Esc cancels.").font(.caption).foregroundStyle(.secondary)
+                Picker("Maximum recording", selection: Binding(get: { state.recordingLimitMinutes }, set: { state.preferences.recordingLimitMinutes = $0 })) {
+                    ForEach(1...30, id: \.self) { minutes in Text(minutes == 1 ? "1 minute" : "\(minutes) minutes").tag(minutes) }
+                }.disabled(state.phase != .idle)
+                Text("Choose 1–30 minutes. At the limit, dictation finishes and inserts your text. Longer recordings take more memory and may take longer to transcribe.").font(.caption).foregroundStyle(.secondary)
+                Toggle("Finish automatically after a quiet pause", isOn: Binding(get: { state.preferences.autoStopSilence ?? false }, set: { state.preferences.autoStopSilence = $0 }))
+                if state.preferences.autoStopSilence ?? false {
+                    Picker("Quiet pause", selection: Binding(get: { state.preferences.silenceDelay ?? 5 }, set: { state.preferences.silenceDelay = $0 })) {
+                        Text("3 seconds").tag(3.0); Text("5 seconds").tag(5.0); Text("8 seconds").tag(8.0); Text("10 seconds").tag(10.0)
+                    }
+                    Picker("Microphone sensitivity (next recording)", selection: Binding(get: { state.preferences.quietThresholdDB ?? -42 }, set: { state.preferences.quietThresholdDB = $0 })) {
+                        Text("Quiet voice · −50 dB").tag(-50.0); Text("Balanced · −42 dB").tag(-42.0); Text("Noisy room · −34 dB").tag(-34.0)
+                    }
+                }
+                Text("Off by default. After speech begins, a quiet pause can finish the recording and insert the text. This uses microphone loudness; background noise can keep it running. Adjust sensitivity for your room.").font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Permissions and privacy") {
+                HStack { LabeledContent("Microphone", value: state.microphoneStatus); Button("Request microphone access", action: state.requestMicrophone) }
+                HStack { Label(state.accessibility ? "Accessibility allowed" : "Accessibility needed", systemImage: state.accessibility ? "checkmark.circle" : "hand.raised"); Spacer(); Button("Open permissions", action: state.requestAccessibility); Button("Refresh", action: state.refreshPermissions) }
+                if !state.accessibility {
+                    Text("Already enabled in macOS? Remove the old Open Whisper entry, add the current app again, enable it, then quit and reopen Open Whisper. The app checks actual access, not the saved switch.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Toggle("Keep dictation history", isOn: $state.preferences.keepHistory)
+                Toggle("Learn from corrections in dictated text", isOn: $state.preferences.learnCorrections)
+                Toggle("Allow clipboard paste for unsupported text fields", isOn: $state.preferences.clipboardFallback)
+                Text("Clipboard fallback briefly uses the system clipboard, which may sync through Universal Clipboard. It is off by default. Password fields are excluded.").font(.caption).foregroundStyle(.secondary)
+                Button("Show local data folder") { NSWorkspace.shared.open(SpeechEngine.root) }
+                Text("Stores up to 1,000 transcripts. Audio is never saved. Turning history off stops new entries; existing entries can be deleted in History.").font(.caption).foregroundStyle(.secondary)
+            }
+            if !state.preferences.apps.isEmpty {
+                Section("App preferences") {
+                    ForEach($state.preferences.apps) { $app in
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(app.name).font(.headline)
+                            Picker("Language", selection: $app.language) { Text("Use default").tag("default"); languageOptions }
+                            Picker("Spoken punctuation commands", selection: $app.spokenPunctuation) {
+                                Text("Use default").tag(Optional<Bool>.none)
+                                Text("Enabled").tag(Optional.some(true))
+                                Text("Disabled").tag(Optional.some(false))
+                            }
+                            Toggle("Press Enter after dictation", isOn: Binding(get: { app.pressEnterAfterDictation ?? false }, set: { app.pressEnterAfterDictation = $0 }))
+                            Text("Only for \(app.name). Enter is pressed after text delivery if the original field still has focus. In chat apps, this may send your message. Off by default.").font(.caption).foregroundStyle(.secondary)
+                        }.padding(.vertical, 6)
+                    }
+                }
+            }
+            Section("Open model credits") {
+                Text("Parakeet Ultra: Moondream / NVIDIA, CC BY 4.0. FluidAudio: Apache 2.0. Whisper / WhisperKit: MIT. See THIRD_PARTY_NOTICES.md in the source for links and licenses.").font(.caption).foregroundStyle(.secondary)
+            }
+        }.formStyle(.grouped)
+    }
+}
