@@ -435,6 +435,8 @@ struct FlowSettingsView: View {
                     Button("Refresh", action: state.refreshInputDevices)
                 }.disabled(state.phase != .idle)
                 Text("Automatic follows your Mac’s input device. A selected microphone is remembered; switching applies to the next recording.").font(.caption).foregroundStyle(.secondary)
+                Toggle("Mute audio while recording", isOn: Binding(get: { state.preferences.muteWhileRecording ?? false }, set: { state.preferences.muteWhileRecording = $0 })).disabled(state.phase != .idle)
+                Text("Mutes your Mac’s audio output and alert sounds while recording, including practice. Restores the previous mute state when you finish or cancel, without changing volume. Outputs must support macOS mute.").font(.caption).foregroundStyle(.secondary)
                 Toggle("Middle mouse button starts and stops dictation", isOn: $state.preferences.middleMouse)
                 HStack {
                     LabeledContent("Keyboard shortcut", value: state.capturingShortcut ? "Press your shortcut…" : state.keyboardShortcutLabel)

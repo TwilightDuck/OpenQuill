@@ -87,12 +87,17 @@ private final class AudioSink: NSObject, AVCaptureAudioDataOutputSampleBufferDel
 
 @MainActor
 final class AudioCapture {
+    var onAudioMuteFailure: ((String) -> Void)?
+    private let audioMute = RecordingAudioMute()
     private var session: AVCaptureSession?
     private var sink: AudioSink?
     private let audioQueue = DispatchQueue(label: "OpenQuill.microphone")
     var status: (level: Float, activity: RecordingActivity) { sink?.status() ?? (0, RecordingActivity()) }
     var previewSamples: [Float] { sink?.previewSamples() ?? [] }
-    func start(maximumSeconds: Double, thresholdDB: Double, deviceUID: String? = nil) throws {
+    init() {
+        audioMute.onFailure = { [weak self] message in self?.onAudioMuteFailure?(message) }
+    }
+    func start(maximumSeconds: Double, thresholdDB: Double, deviceUID: String? = nil, muteOutput: Bool = false) throws {
         let device = deviceUID.flatMap { uid in AudioInputDevice.captureDevices.first { $0.uniqueID == uid } } ?? (deviceUID == nil ? AVCaptureDevice.default(for: .audio) : nil)
         guard let device else { throw FlowError.message("Your microphone is unavailable. Choose another input device or Automatic in Settings.") }
         let input = try AVCaptureDeviceInput(device: device)
@@ -102,11 +107,15 @@ final class AudioCapture {
         guard session.canAddInput(input), session.canAddOutput(output) else { throw FlowError.message("Could not use \(device.localizedName). Choose another input device in Settings.") }
         session.addInput(input); session.addOutput(output)
         output.setSampleBufferDelegate(sink, queue: audioQueue)
-        session.startRunning()
-        guard session.isRunning else { throw FlowError.message("Could not start \(device.localizedName). Check your microphone in Settings.") }
+        do {
+            if muteOutput { try audioMute.begin() }
+            session.startRunning()
+            guard session.isRunning else { throw FlowError.message("Could not start \(device.localizedName). Check your microphone in Settings.") }
+        } catch { session.stopRunning(); audioMute.restore(); throw error }
         self.session = session; self.sink = sink
     }
     func stop() throws -> [Float] {
+        defer { audioMute.restore() }
         session?.stopRunning(); session = nil
         let result = audioQueue.sync { sink?.snapshot() }; sink = nil
         if let error = result?.error { throw FlowError.message(error) }

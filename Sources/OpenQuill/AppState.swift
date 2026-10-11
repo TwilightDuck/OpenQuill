@@ -36,6 +36,7 @@ struct Preferences: Codable {
     var keyboardHoldToTalk: Bool?
     var livePreview: Bool?
     var localCleanup: Bool?
+    var muteWhileRecording: Bool?
 }
 
 enum DictationPhase: Equatable {
@@ -145,6 +146,7 @@ final class AppState {
         triggers.middleEnabled = preferences.middleMouse
         triggers.onToggle = { [weak self] in self?.toggle() }
         triggers.onCancel = { [weak self] in self?.cancel() }
+        capture.onAudioMuteFailure = { [weak self] message in self?.cancel(); self?.notice = message }
         triggers.onStart = { [weak self] in if self?.phase == .idle { self?.toggle() } }
         triggers.onFinish = { [weak self] in
             if self?.phase == .starting { self?.finishAfterStart = true }
@@ -321,7 +323,7 @@ final class AppState {
             // On first permission prompt the user may have selected another app.
             guard target == nil || target?.stillFocused == true else { phase = .idle; notice = "Select your text field and click the middle button again."; return }
             do {
-                try capture.start(maximumSeconds: recordingMaximumSeconds, thresholdDB: preferences.quietThresholdDB ?? -42, deviceUID: recordingInputDeviceUID); phase = .recording; recordingStarted = Date(); elapsed = 0
+                try capture.start(maximumSeconds: recordingMaximumSeconds, thresholdDB: preferences.quietThresholdDB ?? -42, deviceUID: recordingInputDeviceUID, muteOutput: preferences.muteWhileRecording ?? false); phase = .recording; recordingStarted = Date(); elapsed = 0
                 level = 0; silenceRemaining = nil
                 panel.show(title: "Listening", detail: currentApp, maximumSeconds: recordingMaximumSeconds, middleMouse: preferences.middleMouse && mouseAvailable, shortcut: keyboardShortcutLabel, holdToTalk: preferences.keyboardHoldToTalk ?? false, screen: target?.screen)
                 let meterTimer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in

@@ -68,6 +68,8 @@ Learning personal vocabulary uses local replacement rules and recognition hints.
 
 **Settings → Dictation → Input device** offers Automatic (your Mac’s system input) and the available microphones. A specific device is remembered by its persistent UID and applies to the next recording without changing the system-wide input. If it disconnects, recording reports the unavailable device instead of silently switching microphones. Use Refresh after connecting a device, or choose Automatic.
 
+**Settings → Dictation → Mute audio while recording** is off by default. When enabled, it temporarily mutes the Mac’s default audio output and system alert output during dictation and setup practice, following output-device changes. Finishing, quiet-pause/time-limit stopping, cancellation, a start failure and normal app termination restore outputs the recording muted before transcription, without changing playback volume or unmuting an already-muted output. An explicit unmute is respected. Devices must expose macOS software mute; an unsupported output reports an error instead of recording with audio playing. Apps routed directly to a different output are outside the default routes. Force-quitting or a process crash cannot run restoration; an output disconnected before restoration may need its own mute control after reconnecting.
+
 Choose **Settings → Dictation → Maximum recording** to set a limit from **1 to 30 minutes** (default: 3). The audio-buffer bound, automatic stop, Dictate screen and overlay all use the chosen limit, captured when recording starts. At the limit, the app transcribes and inserts automatically. Longer recordings use more memory and can take longer to transcribe. The listening panel is a persistent, nonactivating SwiftUI view: a real microphone-level history updates at 30 Hz, with fast attack and smooth release. It shows elapsed time and the recording limit without stealing the text-field focus.
 
 **Settings → Dictation → Finish automatically after a quiet pause** is off by default. Enable it and choose 3, 5, 8, or 10 seconds. Once at least 250 ms of continuous above-threshold audio has been observed, a sustained quiet pause finishes through the same transcription/insertion path as the hotkey. This is loudness-based quiet detection, not semantic voice activity detection: background noise can keep it running, and faint speech can fall below the threshold. Choose a sensitivity preset for your microphone and room; threshold changes apply to the next recording. No silence model downloads or network calls are needed.
@@ -102,11 +104,14 @@ Preferences live in the app's macOS UserDefaults domain. The microphone buffer i
 swift test
 ./scripts/verify-offline.sh
 ./scripts/verify-signing.sh
+./scripts/verify-recording-mute.sh
 ```
 
 The first command also checks snippet upgrade/persistence, literal multiline expansion, overlapping/disabled triggers, non-cascading replacements and protected cleanup fallback. It checks the local correction/persistence feature flow, context isolation, Unicode, conflicting substitutions, global taught-name precedence, quiet-pause timing/toggle behavior and 1/3/10/30-minute limits, speech-profile accounting including Japanese/Chinese/Thai word boundaries, literal spacing in name corrections, and punctuation-only edits. The second performs real model inference on generated English, Belgian Dutch, French, German and Spanish speech while macOS denies network access to the executable. It requires the Parakeet model to have been downloaded and the macOS Samantha, Ellen, Thomas, Anna and Mónica voices to be available. Synthetic speech is a pipeline check, not a measure of microphone quality or the user's accent.
 
 The signing check changes a disposable copy's version, signs it again, and verifies that it satisfies the original app's identity requirement despite having a different code hash. A valid signature from a different signer must fail that requirement. This checks signing continuity; retaining a real Accessibility grant after a rebuild still needs a macOS permission and relaunch check.
+
+The recording-mute check exercises the production mute controller against the current native audio outputs. It briefly changes mute state and restores the starting state, checking repeatable start/stop, already-muted output, explicit unmute, normal termination and unchanged volume. The outputs must support software mute. Pass `--read-only` to inspect mute and volume without changing them.
 
 The executable also supports local file transcription and explicitly requested downloads:
 
@@ -127,6 +132,7 @@ No flag performs an upload. Without `--download-model`, model loading and transc
 - Reopen setup from Settings, walk through it, record and cancel practice, and verify history/statistics are unchanged. Granted permissions must have no request button. “Start dictating” and “Skip setup” must open Dictate; “Review settings” must open Settings.
 - Reserve Option-Space in another app before launching Open Quill: Settings must report the keyboard shortcut unavailable, Dictate must show only working shortcuts, and releasing the competing key must restore availability without restarting. Completion must include the selected language and actual shortcut readiness.
 - Select each available microphone and record in practice; reconnect a selected device and refresh. An unavailable selection must fail visibly, and Automatic must follow the system input.
+- Enable Mute audio while recording, start practice, and check the output is muted only during microphone capture. Finish, cancel and quit while recording; each must restore audio. Reopen the app to check the setting persists, and verify disabled recordings leave audio alone.
 - Change Maximum recording, reopen the app and verify it persists; check the overlay uses that duration.
 - Enable Press Enter after dictation for a local scratch editor and verify text precedes a single newline; disable it and verify no newline. Check a different app stays disabled and that cancelled/focus-changed/partial insertion does not press Enter. Do not use a real chat for an unattended send test.
 - Enable quiet-pause stopping, speak, pause for the configured delay, and verify automatic insertion. Resume speaking before the delay and verify recording continues. Disable it and verify pauses do not finish recording.
