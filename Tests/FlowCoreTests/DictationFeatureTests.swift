@@ -177,3 +177,34 @@ func quietPauseStoppingWaitsForSpeechRespectsToggleAndHonorsTheChosenRecordingLi
     #expect(!TextProcessing.isExactInsertion(before: "Existing text.", after: "Changed text. Hello Éline 👋", inserted: " Hello Éline 👋"))
     #expect(!TextProcessing.isExactInsertion(before: "Hello Éline 👋", after: "Hello Éline 👋", inserted: "Hello Éline 👋"))
 }
+
+@Test func spokenSnippetsSurviveUpgradeRestartAndExpandLiteralTextOnce() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let store = DiskStore(url: folder.appendingPathComponent("history.json"))
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    try Data(#"{"dictations":[],"corrections":[]}"#.utf8).write(to: store.url)
+    var data = try store.load()
+    #expect(data.snippets.isEmpty) // Older installations upgrade without losing history.
+    let signature = "Kind regards,\nÉline 👋\nhttps://example.com/$1\\notes"
+    data.snippets = [SpokenSnippet(trigger: "  my   signature  ", replacement: signature),
+                     SpokenSnippet(trigger: "signature", replacement: "short signature"),
+                     SpokenSnippet(trigger: "booking link", replacement: "https://example.com/book", enabled: false),
+                     SpokenSnippet(trigger: "short signature", replacement: "Do not cascade")]
+    try store.save(data)
+    let restored = try store.load()
+    #expect(restored.snippets.first?.replacement == signature)
+    #expect(SnippetProcessing.expand("MY SIGNATURE; my signature. signature. booking link. my signatureville.", snippets: restored.snippets, language: "en") == "\(signature); \(signature). short signature. booking link. my signatureville.")
+    #expect(Set(SnippetProcessing.matchingTriggers("My signature.", snippets: restored.snippets, language: "en")) == Set(["my signature", "signature"]))
+    #expect(SnippetProcessing.expand("请说我的签名。", snippets: [SpokenSnippet(trigger: "我的签名", replacement: signature)], language: "zh") == "请说\(signature)。")
+}
+
+@Test func optionalCleanupRejectsLostProtectedContentAndKeepsUsefulProofreading() {
+    let original = "Um send 12.50 euros to Éline using my signature tomorrow."
+    #expect(CleanupValidation.accepts("Send 12.50 euros to Éline using my signature tomorrow.", original: original, protectedPhrases: ["Éline", "my signature"]))
+    #expect(!CleanupValidation.accepts("Send 1250 euros to Éline using my signature tomorrow.", original: original, protectedPhrases: ["Éline", "my signature"]))
+    #expect(!CleanupValidation.accepts("Send 12.50 euros to Eline tomorrow.", original: original, protectedPhrases: ["Éline", "my signature"]))
+    #expect(!CleanupValidation.accepts("No, I will send the report tomorrow and call you afterward.", original: "No.", protectedPhrases: []))
+    #expect(!CleanupValidation.accepts("", original: original, protectedPhrases: []))
+    #expect(!CleanupValidation.accepts(String(repeating: "Extra information. ", count: 20), original: original, protectedPhrases: []))
+}

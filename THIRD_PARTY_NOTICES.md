@@ -10,3 +10,5 @@ Open Whisper uses free local inference software and models. No paid API is requi
 The downloaded Core ML representations and quantized weights are modified deployment formats of their upstream models. Parakeet Ultra additionally contains post-training changes from Moondream. Their authors do not endorse this application.
 
 Dependency license texts are copied into the app's Resources/Licenses folder by the build script. Each model's upstream license and attribution continue to apply to its downloaded files.
+
+Optional cleanup uses Apple's system-provided **Foundation Models** framework and on-device language model on eligible macOS 26+ systems. This is an Apple platform service, not an open-source model bundled or redistributed by this project. Apple Intelligence must be enabled and its model ready. Speech recognition, snippets and correction rules do not require it. [Apple Foundation Models documentation](https://developer.apple.com/documentation/foundationmodels).

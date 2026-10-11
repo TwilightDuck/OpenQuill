@@ -204,13 +204,13 @@ struct SetupGuide: View {
                 }
                 Text("or").foregroundStyle(Color.flowSecondary)
                 VStack(spacing: 16) {
-                    Text("⌥ Space").font(.system(size: 25, weight: .medium)).padding(16)
+                    Text(state.keyboardShortcutLabel).font(.system(size: 25, weight: .medium)).padding(16)
                         .background(Color.flowSurface, in: RoundedRectangle(cornerRadius: 10))
                         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.flowSeparator))
                     Text("Keyboard shortcut").font(.system(size: 12, weight: .medium))
                 }
             }.frame(height: 100)
-            heading("Start and stop, your way.", "Press once to speak. Press again to finish. Escape cancels.")
+            heading("Start and stop, your way.", state.preferences.keyboardHoldToTalk == true ? "Hold your keyboard shortcut to speak; release to finish. The middle button toggles. Escape cancels." : "Press once to speak. Press again to finish. Escape cancels.")
             VStack(alignment: .leading, spacing: 16) {
                 Toggle("Use the middle mouse button", isOn: $state.preferences.middleMouse)
                 LabeledContent("Dictation language") {
@@ -239,6 +239,7 @@ struct SetupGuide: View {
     private var practice: some View {
         VStack(spacing: 20) {
             heading("Try it here first.", "A scratch space just for you. No messages sent. No history saved.")
+            if let notice = state.notice { Label(notice, systemImage: "info.circle").font(.callout).foregroundStyle(Color.flowWarning).multilineTextAlignment(.center) }
             SpeechLanguagePicker(title: "Practice language", selection: $state.practiceLanguage, model: state.preferences.model)
                 .buttonStyle(.bordered).disabled(state.phase != .idle)
             if state.modelReady && state.microphoneStatus == "Allowed" && state.inputDeviceAvailable && state.preferences.model.supports(state.practiceLanguage) {
@@ -253,6 +254,10 @@ struct SetupGuide: View {
                         TextEditor(text: $state.practiceText).font(.system(size: 15)).scrollContentBackground(.hidden)
                             .focused($scratchFocused).accessibilityLabel("Practice text, never sent or saved")
                     }.frame(height: 115)
+                    if state.phase == .recording && !state.liveTranscript.isEmpty {
+                        Text(state.liveTranscript).font(.callout).foregroundStyle(Color.flowSecondary).lineLimit(2)
+                            .accessibilityLabel("Live preview: \(state.liveTranscript)")
+                    }
                     Divider()
                     Text(practicePrompt)
                         .font(.system(size: 11)).foregroundStyle(Color.flowSecondary)

@@ -318,3 +318,11 @@ The Speech profile describes dictation habits in neutral language. It is never a
 - [ ] Correction learning is bounded, stable, needs two matches, and is app- and language-scoped. Unsupported apps are labelled truthfully, with no global keystroke capture.
 - [ ] Enter-after-insertion is per app, off by default, and carries its warning.
 - [ ] No web views, remote assets, telemetry or saved audio.
+
+## Dictation tools added in version 0.6
+
+The existing type, color, spacing and motion tokens also apply to the new tools. Spoken snippets get a dedicated sidebar destination, a restrained empty state, editable rows with enabled switches, and a native sheet with a visibly bounded multiline editor. Exact saved text and line breaks remain legible without opening an editor.
+
+Live preview stays provisional: one 11-point line beneath the listening controls, adding only 24 points to the panel height. The notch stays attached at its top edge; external displays keep the bottom position. Dictate and private practice provide a larger preview. Final transcription still uses the whole recording.
+
+Shortcut capture is a native Settings control, alongside an explicit toggle/hold choice. Every shortcut label reflects the saved combination. Middle-button behavior stays a two-click toggle. Optional AI cleanup has a separate section with its real on-device availability, clear platform requirements and a per-app override. Failed cleanup preserves the transcript; saved snippets expand afterward.

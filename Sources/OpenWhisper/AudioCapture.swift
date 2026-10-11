@@ -73,6 +73,10 @@ private final class AudioSink: NSObject, AVCaptureAudioDataOutputSampleBufferDel
         lock.lock(); defer { lock.unlock() }
         return (samples, failure)
     }
+    func previewSamples() -> [Float] {
+        lock.lock(); defer { lock.unlock() }
+        return Array(samples.suffix(12 * 16000))
+    }
     func status() -> (level: Float, activity: RecordingActivity) {
         lock.lock(); defer { lock.unlock() }
         // A logarithmic meter stays responsive for quieter voices.
@@ -87,6 +91,7 @@ final class AudioCapture {
     private var sink: AudioSink?
     private let audioQueue = DispatchQueue(label: "OpenWhisper.microphone")
     var status: (level: Float, activity: RecordingActivity) { sink?.status() ?? (0, RecordingActivity()) }
+    var previewSamples: [Float] { sink?.previewSamples() ?? [] }
     func start(maximumSeconds: Double, thresholdDB: Double, deviceUID: String? = nil) throws {
         let device = deviceUID.flatMap { uid in AudioInputDevice.captureDevices.first { $0.uniqueID == uid } } ?? (deviceUID == nil ? AVCaptureDevice.default(for: .audio) : nil)
         guard let device else { throw FlowError.message("Your microphone is unavailable. Choose another input device or Automatic in Settings.") }

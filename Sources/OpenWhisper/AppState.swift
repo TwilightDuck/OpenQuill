@@ -11,6 +11,7 @@ struct AppPreference: Codable, Identifiable {
     var language = "default"
     var spokenPunctuation: Bool? = nil
     var pressEnterAfterDictation: Bool?
+    var localCleanup: Bool?
 }
 
 struct Preferences: Codable {
@@ -31,16 +32,21 @@ struct Preferences: Codable {
     var recordingLimitMinutes: Int?
     var inputDeviceUID: String?
     var setupStatus: String?
+    var keyboardShortcut: DictationShortcut?
+    var keyboardHoldToTalk: Bool?
+    var livePreview: Bool?
+    var localCleanup: Bool?
 }
 
 enum DictationPhase: Equatable {
-    case idle, starting, recording, processing, inserting, cancelling
+    case idle, starting, recording, processing, cleaning, inserting, cancelling
     var title: String {
         switch self {
         case .idle: "Ready to dictate"
         case .starting: "Starting microphone"
         case .recording: "Listening"
         case .processing: "Transcribing locally"
+        case .cleaning: "Polishing locally"
         case .inserting: "Inserting text"
         case .cancelling: "Cancelling"
         }
@@ -53,6 +59,8 @@ final class AppState {
         didSet {
             if let data = try? JSONEncoder().encode(preferences) { UserDefaults.standard.set(data, forKey: "preferences") }
             triggers.middleEnabled = preferences.middleMouse
+            triggers.useShortcut(preferences.keyboardShortcut ?? DictationShortcut())
+            triggers.holdToTalk = preferences.keyboardHoldToTalk ?? false
             if !preferences.learnCorrections { watch = nil }
         }
     }
@@ -68,6 +76,9 @@ final class AppState {
     var practiceText = ""
     var practiceLanguage = "en"
     var practiceFinished = false
+    var liveTranscript = ""
+    var capturingShortcut = false
+    var cleanupAvailability = LocalCleanup.availability
     var currentApp = "No text field selected"
     var level: Float = 0
     var elapsed: Double = 0
@@ -91,6 +102,7 @@ final class AppState {
         }
     }
     private let engine = SpeechEngine()
+    private let cleanup = LocalCleanup()
     private let capture = AudioCapture()
     private let panel = RecordingPanel()
     private let triggers = DictationTriggers()
@@ -98,6 +110,7 @@ final class AppState {
     private var storeReadable = true
     private var target: TextTarget?
     private var run: Task<Void, Never>?
+    private var previewTask: Task<Void, Never>?
     private var timer: Timer?
     private var meterTimer: Timer?
     private var generation = UUID()
@@ -106,6 +119,9 @@ final class AppState {
     private var recordingPressEnter = false
     private var recordingInputDeviceUID: String?
     private var recordingPractice = false
+    private var recordingCleanup = false
+    private var recordingSnippets: [SpokenSnippet] = []
+    private var finishAfterStart = false
     private var recordingStarted = Date()
     private var watch: EditWatch?
 
@@ -129,6 +145,13 @@ final class AppState {
         triggers.middleEnabled = preferences.middleMouse
         triggers.onToggle = { [weak self] in self?.toggle() }
         triggers.onCancel = { [weak self] in self?.cancel() }
+        triggers.onStart = { [weak self] in if self?.phase == .idle { self?.toggle() } }
+        triggers.onFinish = { [weak self] in
+            if self?.phase == .starting { self?.finishAfterStart = true }
+            else if self?.phase == .recording { self?.finish() }
+        }
+        triggers.useShortcut(preferences.keyboardShortcut ?? DictationShortcut())
+        triggers.holdToTalk = preferences.keyboardHoldToTalk ?? false
         triggers.register()
         hotkeyError = triggers.hotkeyError
         mouseAvailable = triggers.mouseAvailable
@@ -156,11 +179,12 @@ final class AppState {
     var profile: SpeechProfile { SpeechProfile(records: data.dictations) }
     var inputDeviceAvailable: Bool { preferences.inputDeviceUID.map { uid in inputDevices.contains { $0.id == uid } } ?? (systemInputName != nil) }
     var shortcutAvailable: Bool { keyboardAvailable || (preferences.middleMouse && mouseAvailable) }
+    var keyboardShortcutLabel: String { (preferences.keyboardShortcut ?? DictationShortcut()).label }
     var shortcutLabel: String {
         if preferences.middleMouse && mouseAvailable {
-            return keyboardAvailable ? "Middle-click or ⌥ Space" : "Middle-click"
+            return keyboardAvailable ? "Middle-click or \(keyboardShortcutLabel)" : "Middle-click"
         }
-        return keyboardAvailable ? "⌥ Space" : "No dictation shortcut available"
+        return keyboardAvailable ? keyboardShortcutLabel : "No dictation shortcut available"
     }
     var readyToDictate: Bool { modelReady && preferences.model.supports(preferences.language) && microphoneStatus == "Allowed" && accessibility && inputDeviceAvailable && shortcutAvailable }
     var inputDeviceName: String {
@@ -177,7 +201,19 @@ final class AppState {
         microphoneStatus = Self.describeMicrophone()
         triggers.register(); mouseAvailable = triggers.mouseAvailable
         keyboardAvailable = triggers.keyboardAvailable; hotkeyError = triggers.hotkeyError
+        cleanupAvailability = LocalCleanup.availability
     }
+
+    func recordShortcut() {
+        guard phase == .idle else { return }
+        capturingShortcut = true
+        triggers.captureShortcut { [weak self] shortcut in
+            guard let self else { return }
+            if let shortcut { self.preferences.keyboardShortcut = shortcut }
+            self.capturingShortcut = false; self.refreshPermissions()
+        }
+    }
+    func cancelShortcutRecording() { triggers.cancelShortcutCapture(); capturingShortcut = false }
 
     func refreshInputDevices() {
         inputDevices = AudioInputDevice.available(); systemInputName = AudioInputDevice.systemInputName
@@ -205,7 +241,7 @@ final class AppState {
     func requestAccessibility() {
         refreshPermissions()
         guard !accessibility else {
-            notice = "Accessibility is already allowed. Select a text field in another app, then press the middle mouse button or Option-Space."
+            notice = "Accessibility is already allowed. Select a text field in another app, then use \(shortcutLabel)."
             return
         }
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
@@ -271,6 +307,9 @@ final class AppState {
         }
         recordingPunctuation = app?.spokenPunctuation ?? preferences.spokenPunctuation
         recordingPressEnter = !practice && (app?.pressEnterAfterDictation ?? false)
+        recordingCleanup = app?.localCleanup ?? preferences.localCleanup ?? false
+        recordingSnippets = data.snippets
+        finishAfterStart = false; liveTranscript = ""
         recordingMaximumSeconds = Double(recordingLimitMinutes) * 60
         recordingInputDeviceUID = preferences.inputDeviceUID
         phase = .starting
@@ -284,11 +323,13 @@ final class AppState {
             do {
                 try capture.start(maximumSeconds: recordingMaximumSeconds, thresholdDB: preferences.quietThresholdDB ?? -42, deviceUID: recordingInputDeviceUID); phase = .recording; recordingStarted = Date(); elapsed = 0
                 level = 0; silenceRemaining = nil
-                panel.show(title: "Listening", detail: currentApp, maximumSeconds: recordingMaximumSeconds, middleMouse: preferences.middleMouse, screen: target?.screen)
+                panel.show(title: "Listening", detail: currentApp, maximumSeconds: recordingMaximumSeconds, middleMouse: preferences.middleMouse && mouseAvailable, shortcut: keyboardShortcutLabel, holdToTalk: preferences.keyboardHoldToTalk ?? false, screen: target?.screen)
                 let meterTimer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
                     MainActor.assumeIsolated { self?.updateRecording() }
                 }
                 RunLoop.main.add(meterTimer, forMode: .common); self.meterTimer = meterTimer
+                if preferences.livePreview ?? true { startPreview(session: session) }
+                if finishAfterStart { finish() }
             } catch { phase = .idle; notice = error.localizedDescription }
         }
     }
@@ -297,8 +338,16 @@ final class AppState {
         guard phase == .recording else { return }
         meterTimer?.invalidate(); meterTimer = nil
         let samples: [Float]
-        do { samples = try capture.stop() } catch { phase = .idle; panel.hide(); notice = error.localizedDescription; return }
+        do { samples = try capture.stop() } catch {
+            let pending = previewTask; pending?.cancel(); previewTask = nil
+            liveTranscript = ""; panel.hide(); notice = error.localizedDescription; phase = .cancelling
+            run = Task { await pending?.value; phase = .idle }
+            return
+        }
         phase = .processing
+        let processingStarted = Date()
+        let pendingPreview = previewTask; pendingPreview?.cancel(); previewTask = nil
+        liveTranscript = ""
         panel.show(title: "Transcribing locally", detail: "\(preferences.model.title) · Esc to cancel")
         let session = generation
         let target = target
@@ -306,30 +355,48 @@ final class AppState {
         let punctuation = recordingPunctuation
         let pressEnter = recordingPressEnter
         let practice = recordingPractice
+        let useCleanup = recordingCleanup
+        let snippets = recordingSnippets
         let hints = data.corrections.filter { $0.enabled && ($0.bundleID == "*" || $0.bundleID == target?.bundleID) && ($0.language == "*" || $0.language == language) }.map(\.to)
         let vocabulary = ([preferences.vocabulary] + hints).joined(separator: ", ")
         run = Task {
             defer { phase = .idle; panel.hide() }
             do {
+                await pendingPreview?.value
+                guard generation == session, !Task.isCancelled else { return }
                 let result = try await engine.transcribe(samples, language: language, vocabulary: vocabulary)
                 guard generation == session, !Task.isCancelled else { return }
                 guard !result.text.isEmpty else { notice = "No speech detected. Try moving closer to the microphone."; return }
                 let actualLanguage = language == "auto" ? result.language : language
-                let cleaned = TextProcessing.clean(result.text, corrections: data.corrections,
+                var transcript = result.text
+                if useCleanup {
+                    phase = .cleaning; panel.show(title: "Polishing locally", detail: "On-device AI · Esc to cancel")
+                    let spellings = data.corrections.filter { $0.enabled && ($0.bundleID == "*" || $0.bundleID == target?.bundleID) && ($0.language == "*" || $0.language == actualLanguage) }.flatMap { [$0.from, $0.to] }
+                    let vocabulary = preferences.vocabulary.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    let phrases = SnippetProcessing.matchingTriggers(transcript, snippets: snippets, language: actualLanguage)
+                        + (spellings + vocabulary).filter { !$0.isEmpty && transcript.localizedCaseInsensitiveContains($0) }
+                    let output = await cleanup.clean(transcript, language: actualLanguage, protectedPhrases: phrases)
+                    guard generation == session, !Task.isCancelled else { return }
+                    transcript = output.text
+                    if !output.applied { notice = "\(output.status). Using the original transcript." }
+                }
+                let corrected = TextProcessing.clean(transcript, corrections: data.corrections,
                     bundleID: target?.bundleID ?? "", language: actualLanguage, spokenPunctuation: punctuation)
+                let cleaned = SnippetProcessing.expand(corrected, snippets: snippets, language: actualLanguage)
                 if practice {
                     guard showSetup, practiceActive else { return }
                     practiceText = cleaned; practiceFinished = true
                     return
                 }
                 lastText = cleaned
+                let processingSeconds = Date().timeIntervalSince(processingStarted)
                 // Insertion is a commit boundary; Esc cancels decoding, not an already delivered edit.
                 phase = .inserting
                 panel.show(title: "Inserting text", detail: target?.appName ?? "Saving transcript")
                 let delivery = await target?.insert(cleaned, allowPaste: preferences.clipboardFallback, pressEnter: pressEnter) ?? (status: "Saved — no target field", anchor: nil)
                 let record = Dictation(original: result.text, text: cleaned, appName: target?.appName ?? "Open Whisper",
                     bundleID: target?.bundleID ?? "", language: actualLanguage, audioSeconds: result.audioSeconds,
-                    processingSeconds: result.processingSeconds, delivery: delivery.status)
+                    processingSeconds: processingSeconds, delivery: delivery.status)
                 if preferences.keepHistory {
                     data.dictations.insert(record, at: 0)
                     data.dictations = Array(data.dictations.prefix(1000)); persist()
@@ -352,8 +419,33 @@ final class AppState {
     func cancel() {
         guard phase != .idle, phase != .inserting else { return }
         generation = UUID(); run?.cancel()
-        if phase == .recording { meterTimer?.invalidate(); meterTimer = nil; capture.cancel(); phase = .idle; panel.hide() }
+        if phase == .recording {
+            meterTimer?.invalidate(); meterTimer = nil; capture.cancel(); panel.hide(); liveTranscript = ""
+            let pending = previewTask; pending?.cancel(); previewTask = nil; phase = .cancelling
+            run = Task { await pending?.value; phase = .idle }
+        }
         else { phase = .cancelling }
+    }
+
+    private func startPreview(session: UUID) {
+        let language = recordingLanguage
+        let vocabulary = preferences.vocabulary
+        previewTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(2))
+                    guard generation == session, phase == .recording else { return }
+                    guard capture.status.activity.silenceSeconds.map({ $0 < 2 }) == true else { continue }
+                    let samples = capture.previewSamples
+                    guard samples.count >= 8000 else { continue }
+                    let result = try await engine.transcribe(samples, language: language, vocabulary: vocabulary)
+                    guard !Task.isCancelled, generation == session, phase == .recording else { return }
+                    liveTranscript = result.text
+                    panel.preview(result.text)
+                } catch { return }
+            }
+        }
     }
 
     private func updateRecording() {
@@ -415,6 +507,17 @@ final class AppState {
         persist()
     }
     func removeRule(_ id: UUID) { data.corrections.removeAll { $0.id == id }; persist() }
+    @discardableResult func saveSnippet(_ snippet: SpokenSnippet) -> Bool {
+        guard snippet.valid, !data.snippets.contains(where: { $0.id != snippet.id && $0.trigger.caseInsensitiveCompare(snippet.trigger) == .orderedSame }) else { return false }
+        if let index = data.snippets.firstIndex(where: { $0.id == snippet.id }) { data.snippets[index] = snippet }
+        else { data.snippets.append(snippet) }
+        persist(); return true
+    }
+    func setSnippet(_ id: UUID, enabled: Bool) {
+        guard let index = data.snippets.firstIndex(where: { $0.id == id }) else { return }
+        data.snippets[index].enabled = enabled; persist()
+    }
+    func removeSnippet(_ id: UUID) { data.snippets.removeAll { $0.id == id }; persist() }
     @discardableResult func teachName(from: String, to: String, language: String) -> Bool {
         guard data.teach(from: from, to: to, language: language) else { return false }
         persist(); return true

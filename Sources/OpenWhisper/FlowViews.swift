@@ -3,7 +3,7 @@ import Charts
 import FlowCore
 
 enum FlowPage: String, CaseIterable, Identifiable {
-    case dictate = "Dictate", history = "History", statistics = "Statistics", profile = "Speech profile", vocabulary = "Vocabulary", settings = "Settings"
+    case dictate = "Dictate", history = "History", statistics = "Statistics", profile = "Speech profile", vocabulary = "Vocabulary", snippets = "Snippets", settings = "Settings"
     var id: String { rawValue }
     var icon: String {
         switch self {
@@ -12,6 +12,7 @@ enum FlowPage: String, CaseIterable, Identifiable {
         case .statistics: "chart.bar.xaxis"
         case .profile: "person.crop.circle"
         case .vocabulary: "text.book.closed"
+        case .snippets: "text.badge.plus"
         case .settings: "slider.horizontal.3"
         }
     }
@@ -49,6 +50,7 @@ struct FlowWindow: View {
                 case .statistics: StatisticsView(state: state)
                 case .profile: SpeechProfileView(state: state)
                 case .vocabulary: VocabularyView(state: state)
+                case .snippets: SnippetsView(state: state)
                 case .settings: FlowSettingsView(state: state)
                 }
             }
@@ -85,7 +87,7 @@ struct DictateView: View {
                 VStack(spacing: 18) {
                     Image(systemName: "waveform").font(.system(size: 46, weight: .light)).foregroundStyle(Color.flowAccent).accessibilityHidden(true)
                     Text(state.phase == .idle ? "Speak your mind." : state.phase.title).font(.system(size: 34, weight: .semibold, design: .rounded)).tracking(-0.8)
-                    Text(state.phase == .recording ? "\(Int(state.elapsed))s of \(state.recordingLimitLabel) · press again to finish" : (!state.shortcutAvailable ? "Check shortcut access in Settings." : (state.preferences.middleMouse && state.mouseAvailable ? "Middle-click. Speak. Click again." : "Press ⌥Space. Speak. Press again.")))
+                    Text(state.phase == .recording ? "\(Int(state.elapsed))s of \(state.recordingLimitLabel) · \(state.preferences.keyboardHoldToTalk == true && !state.preferences.middleMouse ? "release to finish" : "press again to finish")" : (!state.shortcutAvailable ? "Check shortcut access in Settings." : (state.preferences.middleMouse && state.mouseAvailable ? "Middle-click. Speak. Click again." : "Use \(state.keyboardShortcutLabel) to dictate.")))
                         .font(.body).foregroundStyle(.secondary)
                     HStack(spacing: 12) {
                         if state.preferences.middleMouse && state.mouseAvailable {
@@ -94,10 +96,10 @@ struct DictateView: View {
                             if state.keyboardAvailable { Text("or").foregroundStyle(.secondary) }
                         }
                         if state.keyboardAvailable {
-                            Text("⌥ Space").padding(.horizontal, 12).padding(.vertical, 8).background(.quaternary, in: Capsule())
+                            Text(state.keyboardShortcutLabel).padding(.horizontal, 12).padding(.vertical, 8).background(.quaternary, in: Capsule())
                         }
                     }.font(.callout)
-                    if state.phase == .processing || state.phase == .starting || state.phase == .cancelling { ProgressView().controlSize(.small) }
+                    if state.phase == .processing || state.phase == .cleaning || state.phase == .starting || state.phase == .cancelling { ProgressView().controlSize(.small) }
                     if state.phase == .recording {
                         ProgressView(value: Double(state.level)).tint(Color.flowAccent).frame(width: 220)
                         if let remaining = state.silenceRemaining, remaining < 4.5 { Text("Finishing after silence in \(Int(ceil(remaining)))s").font(.caption).foregroundStyle(.secondary) }
@@ -111,6 +113,13 @@ struct DictateView: View {
                 .frame(maxWidth: .infinity).padding(.vertical, 38)
                 .background(LinearGradient(colors: [Color.flowAccent.opacity(0.10), Color.flowAccent.opacity(0.025)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 24))
                 .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(Color.flowAccent.opacity(0.12), lineWidth: 1))
+                if state.phase == .recording, !state.liveTranscript.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("Live preview · latest speech", systemImage: "waveform").font(.headline)
+                        Text(state.liveTranscript).font(.body).foregroundStyle(.secondary)
+                        Text("Provisional words from the latest 12 seconds. The whole recording is transcribed when you finish.").font(.caption).foregroundStyle(.secondary)
+                    }.flowCard()
+                }
                 HStack(spacing: 12) {
                     ProfileMetric(title: "Words captured", value: state.totalWords.formatted(), icon: "text.alignleft")
                     ProfileMetric(title: "Personal terms", value: state.personalTerms.count.formatted(), icon: "text.book.closed")
@@ -362,7 +371,7 @@ struct SpeechProfileView: View {
     }
 }
 
-private extension View {
+extension View {
     func flowCard() -> some View {
         self.padding(20).frame(maxWidth: .infinity, alignment: .leading)
             .background(.background, in: RoundedRectangle(cornerRadius: 16))
@@ -427,9 +436,24 @@ struct FlowSettingsView: View {
                 }.disabled(state.phase != .idle)
                 Text("Automatic follows your Mac’s input device. A selected microphone is remembered; switching applies to the next recording.").font(.caption).foregroundStyle(.secondary)
                 Toggle("Middle mouse button starts and stops dictation", isOn: $state.preferences.middleMouse)
-                LabeledContent("Keyboard fallback", value: state.keyboardAvailable ? "⌥Space · Available" : "Unavailable")
+                HStack {
+                    LabeledContent("Keyboard shortcut", value: state.capturingShortcut ? "Press your shortcut…" : state.keyboardShortcutLabel)
+                    if state.capturingShortcut { Button("Cancel", action: state.cancelShortcutRecording) }
+                    else {
+                        Button("Record shortcut", action: state.recordShortcut)
+                        Button("Reset") { state.preferences.keyboardShortcut = nil; state.refreshPermissions() }
+                    }
+                }.disabled(state.phase != .idle)
+                Text("Include Command, Option or Control. Escape cancels shortcut recording. Your middle button continues to toggle independently.").font(.caption).foregroundStyle(.secondary)
+                Picker("Keyboard behavior", selection: Binding(get: { state.preferences.keyboardHoldToTalk ?? false }, set: { state.preferences.keyboardHoldToTalk = $0 })) {
+                    Text("Press to start and stop").tag(false)
+                    Text("Hold to talk, release to finish").tag(true)
+                }.disabled(state.phase != .idle)
+                LabeledContent("Keyboard access", value: state.keyboardAvailable ? "Available" : "Unavailable")
                 LabeledContent("Middle mouse access", value: state.mouseAvailable ? "Available" : (state.accessibility ? "Unavailable · Refresh access" : "Allow Accessibility, then refresh"))
                 if let error = state.hotkeyError { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Color.flowWarning) }
+                Toggle("Show live transcript preview", isOn: Binding(get: { state.preferences.livePreview ?? true }, set: { state.preferences.livePreview = $0 })).disabled(state.phase != .idle)
+                Text("A provisional preview of the latest 12 seconds appears while you speak. It stays out of your text field until you finish. Preview adds local model work; Whisper can update more slowly.").font(.caption).foregroundStyle(.secondary)
                 LabeledContent("Default language") { SpeechLanguagePicker(title: "Default language", selection: $state.preferences.language, model: state.preferences.model) }.disabled(state.phase != .idle)
                 Toggle("Recognize spoken punctuation commands", isOn: $state.preferences.spokenPunctuation)
                 Text("Commands currently cover English and Dutch: “new paragraph” or “nieuwe alinea”. Model punctuation is preserved in every language. Esc cancels.").font(.caption).foregroundStyle(.secondary)
@@ -447,6 +471,11 @@ struct FlowSettingsView: View {
                     }
                 }
                 Text("Off by default. After speech begins, a quiet pause can finish the recording and insert the text. This uses microphone loudness; background noise can keep it running. Adjust sensitivity for your room.").font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Local AI cleanup") {
+                Toggle("Lightly polish dictation before inserting", isOn: Binding(get: { state.preferences.localCleanup ?? false }, set: { state.preferences.localCleanup = $0 })).disabled(state.phase != .idle)
+                Label(state.cleanupAvailability, systemImage: "cpu").font(.callout).foregroundStyle(.secondary)
+                Text("Optional, off by default. Uses Apple’s on-device model to tidy fillers, obvious grammar slips and spoken self-corrections. Requires macOS 26+, Apple Intelligence and a supported language. No account or cloud fallback. If unavailable, too long, or unsuccessful, your original transcript is used. AI can change wording; review important text. Snippets expand afterward to preserve their exact saved text.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Permissions and privacy") {
                 HStack {
@@ -482,6 +511,11 @@ struct FlowSettingsView: View {
                                 Text("Enabled").tag(Optional.some(true))
                                 Text("Disabled").tag(Optional.some(false))
                             }
+                            Picker("Local AI cleanup", selection: $app.localCleanup) {
+                                Text("Use default").tag(Optional<Bool>.none)
+                                Text("Enabled").tag(Optional.some(true))
+                                Text("Disabled").tag(Optional.some(false))
+                            }.disabled(state.phase != .idle)
                             Toggle("Press Enter after dictation", isOn: Binding(get: { app.pressEnterAfterDictation ?? false }, set: { app.pressEnterAfterDictation = $0 }))
                             Text("Only for \(app.name). Enter is pressed after text delivery if the original field still has focus. In chat apps, this may send your message. Turn it off to learn from draft corrections before sending. Off by default.").font(.caption).foregroundStyle(.secondary)
                         }.padding(.vertical, 6)
@@ -491,6 +525,6 @@ struct FlowSettingsView: View {
             Section("Open model credits") {
                 Text("Parakeet Ultra: Moondream / NVIDIA, CC BY 4.0. FluidAudio: Apache 2.0. Whisper / WhisperKit: MIT. See THIRD_PARTY_NOTICES.md in the source for links and licenses.").font(.caption).foregroundStyle(.secondary)
             }
-        }.formStyle(.grouped).onAppear(perform: state.refreshInputDevices)
+        }.formStyle(.grouped).onAppear(perform: state.refreshInputDevices).onDisappear(perform: state.cancelShortcutRecording)
     }
 }

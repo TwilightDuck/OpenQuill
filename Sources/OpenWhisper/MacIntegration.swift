@@ -5,36 +5,99 @@ import SwiftUI
 import Observation
 import FlowCore
 
+struct DictationShortcut: Codable, Equatable, Sendable {
+    var keyCode: UInt32 = UInt32(kVK_Space)
+    var modifiers: UInt32 = UInt32(optionKey)
+    var key: String = "Space"
+    var label: String {
+        (modifiers & UInt32(controlKey) != 0 ? "⌃" : "") +
+        (modifiers & UInt32(optionKey) != 0 ? "⌥" : "") +
+        (modifiers & UInt32(shiftKey) != 0 ? "⇧" : "") +
+        (modifiers & UInt32(cmdKey) != 0 ? "⌘" : "") + " " + key
+    }
+}
+
 @MainActor
 final class DictationTriggers {
     var onToggle: (() -> Void)?
+    var onStart: (() -> Void)?
+    var onFinish: (() -> Void)?
     var onCancel: (() -> Void)?
     var middleEnabled = true
+    var holdToTalk = false
+    private(set) var shortcut = DictationShortcut()
     private var hotkey: EventHotKeyRef?
     private var handler: EventHandlerRef?
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
+    private var shortcutMonitor: Any?
+    private var captured: ((DictationShortcut?) -> Void)?
     var hotkeyError: String?
     var mouseAvailable: Bool { tap != nil }
     var keyboardAvailable: Bool { handler != nil && hotkey != nil }
 
+    func useShortcut(_ value: DictationShortcut) {
+        guard value != shortcut else { return }
+        if let hotkey { UnregisterEventHotKey(hotkey) }
+        hotkey = nil; shortcut = value; register()
+    }
+    func captureShortcut(_ completion: @escaping (DictationShortcut?) -> Void) {
+        cancelShortcutCapture()
+        if let hotkey { UnregisterEventHotKey(hotkey) }
+        hotkey = nil; captured = completion
+        shortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            let consumed = MainActor.assumeIsolated {
+                guard let self else { return false }
+                if event.keyCode == 53 { self.endShortcutCapture(nil); return true }
+                let flags = event.modifierFlags
+                guard !event.isARepeat, !flags.intersection([.command, .option, .control]).isEmpty else {
+                    self.hotkeyError = "Include Command, Option or Control in your shortcut."; return true
+                }
+                var modifiers: UInt32 = 0
+                if flags.contains(.command) { modifiers |= UInt32(cmdKey) }
+                if flags.contains(.option) { modifiers |= UInt32(optionKey) }
+                if flags.contains(.control) { modifiers |= UInt32(controlKey) }
+                if flags.contains(.shift) { modifiers |= UInt32(shiftKey) }
+                let labels: [UInt16: String] = [49: "Space", 36: "Return", 48: "Tab", 51: "Delete", 123: "←", 124: "→", 125: "↓", 126: "↑"]
+                let key = labels[event.keyCode] ?? event.characters(byApplyingModifiers: [])?.uppercased() ?? "Key \(event.keyCode)"
+                self.endShortcutCapture(DictationShortcut(keyCode: UInt32(event.keyCode), modifiers: modifiers, key: key))
+                return true
+            }
+            return consumed ? nil : event
+        }
+        if shortcutMonitor == nil { endShortcutCapture(nil) }
+    }
+    func cancelShortcutCapture() { if captured != nil { endShortcutCapture(nil) } }
+    private func endShortcutCapture(_ value: DictationShortcut?) {
+        if let shortcutMonitor { NSEvent.removeMonitor(shortcutMonitor) }
+        shortcutMonitor = nil
+        let completion = captured; captured = nil
+        if let value { useShortcut(value) }
+        register(); completion?(value)
+    }
     func register() {
+        guard shortcutMonitor == nil else { return }
         let context = Unmanaged.passUnretained(self).toOpaque()
         if handler == nil {
-            var event = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-            let status = InstallEventHandler(GetApplicationEventTarget(), { _, _, pointer in
-                guard let pointer else { return OSStatus(eventNotHandledErr) }
+            var events = [EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+                          EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))]
+            let status = InstallEventHandler(GetApplicationEventTarget(), { _, event, pointer in
+                guard let pointer, let event else { return OSStatus(eventNotHandledErr) }
                 MainActor.assumeIsolated {
-                    Unmanaged<DictationTriggers>.fromOpaque(pointer).takeUnretainedValue().onToggle?()
+                    let owner = Unmanaged<DictationTriggers>.fromOpaque(pointer).takeUnretainedValue()
+                    if GetEventKind(event) == UInt32(kEventHotKeyReleased) {
+                        if owner.holdToTalk { owner.onFinish?() }
+                    } else if owner.holdToTalk { owner.onStart?() }
+                    else { owner.onToggle?() }
                 }
                 return noErr
-            }, 1, &event, context, &handler)
+            }, events.count, &events, context, &handler)
             if status != noErr { hotkeyError = "Keyboard shortcut handler unavailable (\(status))." }
         }
         if handler != nil && hotkey == nil {
-            // A non-exclusive registration can succeed while another app suppresses its events.
-            let status = RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), EventHotKeyID(signature: 0x57464C57, id: 1), GetApplicationEventTarget(), UInt32(kEventHotKeyExclusive), &hotkey)
-            hotkeyError = status == noErr ? nil : "⌥Space is unavailable (\(status)). Another app may be using it."
+            // Non-exclusive registration can succeed while another app suppresses events.
+            let status = RegisterEventHotKey(shortcut.keyCode, shortcut.modifiers, EventHotKeyID(signature: 0x57464C57, id: 1), GetApplicationEventTarget(), UInt32(kEventHotKeyExclusive), &hotkey)
+            hotkeyError = status == noErr ? nil : "\(shortcut.label) is unavailable (\(status)). Another app may be using it."
         }
         guard tap == nil, AXIsProcessTrusted() else { return }
         let mask = (CGEventMask(1) << CGEventType.otherMouseDown.rawValue) | (CGEventMask(1) << CGEventType.otherMouseUp.rawValue) | (CGEventMask(1) << CGEventType.keyDown.rawValue)
@@ -46,6 +109,7 @@ final class DictationTriggers {
                     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
                         if let tap = owner.tap { CGEvent.tapEnable(tap: tap, enable: true) }
                     }
+                    guard owner.shortcutMonitor == nil else { return false }
                     if owner.middleEnabled && (type == .otherMouseDown || type == .otherMouseUp) && event.getIntegerValueField(.mouseEventButtonNumber) == 2 {
                         if type == .otherMouseDown { owner.onToggle?() }
                         return true
@@ -304,6 +368,9 @@ private final class RecordingDisplay {
     var remaining: Double?
     var levels = Array(repeating: Float(0), count: 24)
     var middleMouse = true
+    var shortcut = "⌥ Space"
+    var holdToTalk = false
+    var preview = ""
     var notchDepth: CGFloat = 0
     var presented = false
 }
@@ -326,6 +393,7 @@ private struct ListeningOverlay: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     var body: some View {
+        VStack(spacing: 6) {
         HStack(spacing: 12) {
             if display.title == "Listening" {
                 HStack(spacing: 3) {
@@ -348,10 +416,10 @@ private struct ListeningOverlay: View {
                 HStack(spacing: 7) {
                     if display.middleMouse { MouseShortcutSymbol() }
                     else {
-                        Text("⌥ Space").font(.system(size: 11, weight: .semibold))
+                        Text(display.shortcut).font(.system(size: 11, weight: .semibold))
                             .padding(5).overlay(RoundedRectangle(cornerRadius: 5).stroke(.primary.opacity(0.25)))
                     }
-                    Text("to finish").font(.system(size: 12, weight: .medium))
+                    Text(display.holdToTalk && !display.middleMouse ? "release to finish" : "to finish").font(.system(size: 12, weight: .medium))
                 }.accessibilityElement(children: .combine)
             } else {
                 Image(systemName: "waveform").foregroundStyle(Color.flowAccent).font(.system(size: 17))
@@ -362,6 +430,13 @@ private struct ListeningOverlay: View {
                 Spacer(minLength: 8)
                 ProgressView().controlSize(.mini)
             }
+        }
+        if display.title == "Listening", !display.preview.isEmpty {
+            Text(String(display.preview.suffix(90)).replacingOccurrences(of: "\n", with: " "))
+                .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel("Live preview of latest speech").accessibilityValue(display.preview)
+        }
         }.padding(.horizontal, 16).padding(.vertical, 12)
             .padding(.top, display.notchDepth)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -388,7 +463,7 @@ final class RecordingPanel {
     private var panel: NSPanel?
     private let display = RecordingDisplay()
     private var dismissal: Task<Void, Never>?
-    func show(title: String, detail: String, maximumSeconds: Double = 180, middleMouse: Bool = true, screen targetScreen: NSScreen? = nil) {
+    func show(title: String, detail: String, maximumSeconds: Double = 180, middleMouse: Bool = true, shortcut: String = "⌥ Space", holdToTalk: Bool = false, screen targetScreen: NSScreen? = nil) {
         dismissal?.cancel(); dismissal = nil
         if panel == nil {
             let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 280, height: 56), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -399,8 +474,10 @@ final class RecordingPanel {
             self.panel = panel
         }
         display.title = title; display.detail = detail
+        display.preview = ""; resizeForPreview()
         if title == "Listening" {
             display.middleMouse = middleMouse
+            display.shortcut = shortcut; display.holdToTalk = holdToTalk
             display.maximumSeconds = maximumSeconds
             display.level = 0; display.elapsed = 0; display.remaining = nil
             display.levels = Array(repeating: 0, count: 24)
@@ -433,6 +510,18 @@ final class RecordingPanel {
     func update(level: Float, elapsed: Double, remaining: Double?) {
         display.level = level; display.elapsed = elapsed; display.remaining = remaining
         display.levels.removeFirst(); display.levels.append(level)
+    }
+    func preview(_ text: String) {
+        guard display.title == "Listening" else { return }
+        display.preview = text; resizeForPreview()
+    }
+    private func resizeForPreview() {
+        guard let panel else { return }
+        var frame = panel.frame
+        let height = 56 + display.notchDepth + (display.preview.isEmpty ? 0 : 24)
+        if display.notchDepth > 0 { frame.origin.y += frame.height - height }
+        frame.size.height = height
+        panel.setFrame(frame, display: true)
     }
     func hide() {
         display.presented = false

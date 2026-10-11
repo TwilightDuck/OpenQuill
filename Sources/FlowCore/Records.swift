@@ -61,7 +61,16 @@ public struct Correction: Codable, Identifiable, Sendable {
 public struct FlowData: Codable, Sendable {
     public var dictations: [Dictation] = []
     public var corrections: [Correction] = []
+    public var snippets: [SpokenSnippet] = []
     public init() {}
+
+    private enum CodingKeys: String, CodingKey { case dictations, corrections, snippets }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        dictations = try values.decode([Dictation].self, forKey: .dictations)
+        corrections = try values.decode([Correction].self, forKey: .corrections)
+        snippets = try values.decodeIfPresent([SpokenSnippet].self, forKey: .snippets) ?? []
+    }
 
     @discardableResult public mutating func teach(from: String, to: String, bundleID: String = "*", language: String = "*") -> Bool {
         let from = from.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -154,7 +163,14 @@ public enum TextProcessing {
                 let second = ($1.bundleID == bundleID ? 2 : 0) + ($1.language == language ? 1 : 0)
                 return first > second
             }
-        if !rules.isEmpty {
+        text = replaceTerms(text, terms: rules.map { ($0.from, $0.to) }, language: language)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // Shared by spelling rules and exact snippets: match once, never cascade.
+    static func replaceTerms(_ original: String, terms: [(from: String, to: String)], language: String) -> String {
+        var text = original
+        if !terms.isEmpty {
             let boundaries = Set(wordRanges(text, language: language).flatMap { [$0.lowerBound, $0.upperBound] })
             func startsWord(_ index: String.Index) -> Bool {
                 guard index != text.startIndex else { return true }
@@ -167,7 +183,7 @@ public enum TextProcessing {
                 return next != "_" && (!(next.isLetter || next.isNumber) || boundaries.contains(index))
             }
             var candidates: [(range: NSRange, to: String, priority: Int)] = []
-            for (priority, rule) in rules.enumerated() {
+            for (priority, rule) in terms.enumerated() {
                 guard let regex = try? NSRegularExpression(pattern: NSRegularExpression.escapedPattern(for: rule.from), options: .caseInsensitive) else { continue }
                 for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
                     guard let range = Range(match.range, in: text), startsWord(range.lowerBound), endsWord(range.upperBound) else { continue }
@@ -182,7 +198,7 @@ public enum TextProcessing {
             }
             for edit in edits.reversed() { text = (text as NSString).replacingCharacters(in: edit.range, with: edit.to) }
         }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text
     }
 
     private static func replacePhrase(_ phrase: String, with replacement: String, in text: String) -> String {
