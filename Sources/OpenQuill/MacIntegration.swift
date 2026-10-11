@@ -342,6 +342,13 @@ struct TextTarget {
     private func expectedValue(_ text: String) -> (value: String, prefix: String, suffix: String)? {
         guard let value, let selection, selection.location >= 0, selection.length >= 0,
               selection.location <= value.utf16.count, selection.length <= value.utf16.count - selection.location else { return nil }
+        // Claude's empty rich editor exposes a placeholder paragraph that typing replaces.
+        if bundleID == "com.anthropic.claudefordesktop", value == "\n",
+           selection.location == 0, selection.length == 0, let element,
+           Self.attribute(element, kAXRoleAttribute) as? String == kAXTextAreaRole,
+           Self.attribute(element, kAXNumberOfCharactersAttribute) as? Int == 1 {
+            return (text, "", "")
+        }
         let string = value as NSString
         let prefix = string.substring(to: selection.location)
         let suffix = string.substring(from: selection.location + selection.length)
