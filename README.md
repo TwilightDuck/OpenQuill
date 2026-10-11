@@ -1,4 +1,4 @@
-# Open Whisper
+# Open Quill
 
 A native, free Mac dictation app. Speech recognition, text cleanup, correction learning, history and statistics run on your Mac. A one-time model download is the only network operation the app implements. There are no accounts, API keys, telemetry or cloud transcription.
 
@@ -13,7 +13,7 @@ A native, free Mac dictation app. Speech recognition, text cleanup, correction l
 - Searchable language selection for dictation, practice, app preferences and personal spelling rules.
 - Compact listening feedback that unfolds below a MacBook notch or floats at the bottom of an external display.
 
-This is an early source release. Build it locally using the steps below; a notarized download is not available. Open Whisper is an independent project and is not affiliated with OpenAI or Wispr Flow.
+This is an early source release. Build it locally using the steps below; a notarized download is not available. Open Quill is an independent project and is not affiliated with OpenAI or Wispr Flow.
 
 ## Run the app
 
@@ -21,7 +21,7 @@ Requires Apple silicon, macOS 14 or later, and Xcode / Swift 6.2 or later to bui
 
 ```sh
 ./scripts/build-app.sh
-open "dist/Open Whisper.app"
+open "dist/Open Quill.app"
 ```
 
 First launch opens a five-step setup: privacy, permissions, speech model, microphone and shortcuts, then a private practice field. You can skip it and reopen it from **Settings → Setup guide** or **Help → Show Setup Guide**. Practice text stays in memory and never enters another app, submits a message, or contributes to history and statistics. Existing users keep their setup and preferences. The visual specification, requested from Claude before implementation, is in [docs/DESIGN.md](docs/DESIGN.md).
@@ -30,9 +30,9 @@ Download **Parakeet Ultra** during setup or in Settings. If the files are alread
 
 Local builds use a persistent self-signed development identity stored in an owner-only, separate keychain under `~/Library/Application Support/WisperFlowBuildSigning/`. The keychain password is generated locally and kept in an owner-only file in that folder. Its certificate is pinned in the app's designated requirement, so an ordinary rebuild retains the same identity. The build does not change certificate trust settings or use your login keychain. Keep this signing folder private and retain it between builds. Models and history remain in Application Support.
 
-For existing users, the internal bundle identifier (`be.nick.wisperflow`), preferences domain and Application Support paths retain their original names. This compatibility choice preserves permissions, models and history through the Open Whisper rename. New installations use those same internal paths; no personal files or signing identities are included in this repository.
+For existing users, the internal bundle identifier (`be.nick.wisperflow`), preferences domain and Application Support paths retain their original names. This compatibility choice preserves permissions, models and history through the Open Quill rename (formerly Open Whisper and Wisper Flow). New installations use those same internal paths; no personal files or signing identities are included in this repository.
 
-When upgrading from an older ad-hoc build, macOS can show an enabled Accessibility switch for an identity that no longer matches. Remove only this project's **Open Whisper** (previously **Wisper Flow**) entry using −, add `dist/Open Whisper.app` with +, enable it, then quit and reopen the app. **Wispr Flow** is the separate commercial app. This migration needs a fresh grant once; subsequent builds use the same certificate. The app reports actual process access, independently of the displayed macOS switch.
+When upgrading from an older ad-hoc build, macOS can show an enabled Accessibility switch for an identity that no longer matches. Remove only this project's **Open Quill** (previously **Open Whisper** or **Wisper Flow**) entry using −, add `dist/Open Quill.app` with +, enable it, then quit and reopen the app. **Wispr Flow** is the separate commercial app. This migration needs a fresh grant once; subsequent builds use the same certificate. The app reports actual process access, independently of the displayed macOS switch.
 
 Select a text field in another app, click the **middle mouse button** once, speak, and click again to finish. **Option-Space** is the default keyboard alternative. Change it in **Settings → Dictation → Keyboard shortcut → Record shortcut**: press a combination that includes Command, Option or Control. Escape cancels capture; Reset restores Option-Space. Choose press-to-toggle or hold-to-talk in Keyboard behavior. The middle button always toggles independently. **Escape** cancels recording or transcription. Once text insertion begins it completes as one edit. Middle-button clicks are consumed while the trigger is enabled; disable that trigger in Settings to restore ordinary middle-click behavior. The app stays in the menu bar when its window closes.
 
@@ -58,7 +58,7 @@ The app captures the foreground app, focused field, field value and selected ran
 
 After verified insertion, the app watches that field for up to 60 seconds while it remains focused. It keeps surrounding text fixed and considers only short, contiguous substitutions inside the dictated span. In an otherwise empty field it requires shared text between the original and edited dictation, so whole-message replacement is not learned. It stops tracking when context changes and learns after the edit stays stable for two seconds, without requiring a focus change. A correction seen twice activates for that app and language; conflicting replacements remain inactive for review. Vocabulary shows every learned rule and allows disabling or deleting it. You can also correct a saved transcript manually. **Vocabulary → Teach a name or term** creates an immediately active “heard as → write as” spelling rule across apps, optionally restricted to any catalog language. Explicitly taught spellings take precedence over older automatic guesses; otherwise app-specific rules take precedence over global rules. Active correction targets are also supplied to Whisper as recognition hints. Parakeet Ultra uses these rules after recognition; it does not consume the freeform recognition-hints list.
 
-Electron apps are asked to expose their accessibility tree using Electron’s documented `AXManualAccessibility` flag. When an editable field provides text but omits the caret, the app can verify a unique, complete insertion against the original text and track that exact span. Ambiguous matches are skipped. Validated full-range readback is preferred over AXValue when available, since rich editors can expose a stale or partial value. If the target does not expose enough information, “Couldn’t confirm the text” means typing was dispatched but acceptance could not be checked: the transcript remains on Dictate and automatic correction tracking is off for that dictation. Supported fields are watched in the destination app; you do not need to edit inside Open Whisper.
+Electron apps are asked to expose their accessibility tree using Electron’s documented `AXManualAccessibility` flag. When an editable field provides text but omits the caret, the app can verify a unique, complete insertion against the original text and track that exact span. Ambiguous matches are skipped. Validated full-range readback is preferred over AXValue when available, since rich editors can expose a stale or partial value. If the target does not expose enough information, “Couldn’t confirm the text” means typing was dispatched but acceptance could not be checked: the transcript remains on Dictate and automatic correction tracking is off for that dictation. Supported fields are watched in the destination app; you do not need to edit inside Open Quill.
 
 Learning personal vocabulary uses local replacement rules and recognition hints. It does **not** fine-tune model weights. Optional generative cleanup is a separate setting described below. Apple’s local word tokenizer supports short corrections and names in languages without spaces, including Japanese, Chinese and Thai. Rules preserve the exact text between the changed words, including repeated spaces; surrounding text must remain unchanged. Punctuation-only edits do not teach spelling rules. Replacement candidates are checked against word boundaries in the original transcript, resolved by existing rule priority and applied once without cascading. Segmentation is language-dependent and can be ambiguous; review or disable a rule if it matches an unintended name. The speech model provides punctuation and capitalization; optional spoken punctuation commands support English and Dutch. Per-app settings customize language, spoken commands and optional Enter after dictation, and learned replacements are scoped to the detected app. Complex rewrites and ambiguous edits are deliberately skipped.
 
@@ -111,8 +111,8 @@ The signing check changes a disposable copy's version, signs it again, and verif
 The executable also supports local file transcription and explicitly requested downloads:
 
 ```sh
-"dist/Open Whisper.app/Contents/MacOS/OpenWhisper" --download-model --model parakeet-ultra
-"dist/Open Whisper.app/Contents/MacOS/OpenWhisper" --transcribe /absolute/path/recording.wav --model parakeet-ultra --language nl
+"dist/Open Quill.app/Contents/MacOS/OpenQuill" --download-model --model parakeet-ultra
+"dist/Open Quill.app/Contents/MacOS/OpenQuill" --transcribe /absolute/path/recording.wav --model parakeet-ultra --language nl
 ```
 
 No flag performs an upload. Without `--download-model`, model loading and transcription use local files and fail locally if assets are missing. The app is signed with a local development certificate; it is not notarized for public distribution.
@@ -125,7 +125,7 @@ No flag performs an upload. Without `--download-model`, model loading and transc
 - Change focus, type, or move the caret during transcription: insertion must be skipped.
 - Correct one name twice in the same destination app/language and wait two seconds after each edit; check Vocabulary and the next dictation. Include deleting the mistaken word, pausing a second, then retyping it while the rest of the dictation stays in the field. Edits outside the span, cleared fields and appended paragraphs must not be learned.
 - Reopen setup from Settings, walk through it, record and cancel practice, and verify history/statistics are unchanged. Granted permissions must have no request button. “Start dictating” and “Skip setup” must open Dictate; “Review settings” must open Settings.
-- Reserve Option-Space in another app before launching Open Whisper: Settings must report the keyboard shortcut unavailable, Dictate must show only working shortcuts, and releasing the competing key must restore availability without restarting. Completion must include the selected language and actual shortcut readiness.
+- Reserve Option-Space in another app before launching Open Quill: Settings must report the keyboard shortcut unavailable, Dictate must show only working shortcuts, and releasing the competing key must restore availability without restarting. Completion must include the selected language and actual shortcut readiness.
 - Select each available microphone and record in practice; reconnect a selected device and refresh. An unavailable selection must fail visibly, and Automatic must follow the system input.
 - Change Maximum recording, reopen the app and verify it persists; check the overlay uses that duration.
 - Enable Press Enter after dictation for a local scratch editor and verify text precedes a single newline; disable it and verify no newline. Check a different app stays disabled and that cancelled/focus-changed/partial insertion does not press Enter. Do not use a real chat for an unattended send test.

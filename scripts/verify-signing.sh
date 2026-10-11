@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 cd "${0:A:h:h}"
-app="$PWD/dist/Open Whisper.app"
+app="$PWD/dist/Open Quill.app"
 [[ -d "$app" ]] || { print -u2 "Build the app first."; exit 1; }
 temporary=$(mktemp -d)
 trap 'rm -rf "$temporary"' EXIT

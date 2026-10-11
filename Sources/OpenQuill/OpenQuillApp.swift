@@ -3,7 +3,7 @@ import SwiftUI
 import Foundation
 
 @main
-enum OpenWhisperEntry {
+enum OpenQuillEntry {
     static func main() {
         let args = CommandLine.arguments
         if args.contains("--transcribe") || args.contains("--download-model") {
@@ -30,7 +30,7 @@ enum OpenWhisperEntry {
             }
             dispatchMain()
         } else {
-            OpenWhisperApplication.main()
+            OpenQuillApplication.main()
         }
     }
 }
@@ -40,11 +40,11 @@ final class FlowAppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 
-struct OpenWhisperApplication: App {
+struct OpenQuillApplication: App {
     @NSApplicationDelegateAdaptor(FlowAppDelegate.self) private var delegate
     @State private var state = AppState()
     var body: some Scene {
-        Window("Open Whisper", id: "main") {
+        Window("Open Quill", id: "main") {
             FlowWindow(state: state)
         }
         .defaultSize(width: 980, height: 700)
@@ -61,7 +61,7 @@ struct OpenWhisperApplication: App {
             FlowMenu(state: state)
         } label: {
             Image(systemName: state.phase == .recording ? "mic.fill" : "waveform")
-                .accessibilityLabel("Open Whisper")
+                .accessibilityLabel("Open Quill")
         }
     }
 }
@@ -75,9 +75,9 @@ struct FlowMenu: View {
             .disabled(!state.modelReady || (state.phase != .idle && state.phase != .recording))
         if state.phase != .idle && state.phase != .inserting { Button("Cancel", action: state.cancel) }
         Divider()
-        Button("Open Open Whisper") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
+        Button("Show Open Quill") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
         if !state.lastText.isEmpty { Button("Copy latest dictation") { state.copy(state.lastText) } }
         Divider()
-        Button("Quit Open Whisper") { state.cancel(); NSApp.terminate(nil) }.keyboardShortcut("q")
+        Button("Quit Open Quill") { state.cancel(); NSApp.terminate(nil) }.keyboardShortcut("q")
     }
 }

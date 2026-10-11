@@ -13,7 +13,7 @@ struct SetupGuide: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Label("Open Whisper", systemImage: "waveform").font(.system(size: 13, weight: .semibold))
+                Label("Open Quill", systemImage: "waveform").font(.system(size: 13, weight: .semibold))
                 Spacer()
                 HStack(spacing: 6) {
                     ForEach(steps.indices, id: \.self) { index in
@@ -116,7 +116,7 @@ struct SetupGuide: View {
                 }.frame(width: 380).background(Color.flowSurface, in: RoundedRectangle(cornerRadius: 16))
                     .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.flowSeparator))
             }.frame(height: 210).accessibilityHidden(true)
-            heading("Your voice stays on this Mac.", "Open Whisper turns speech into text locally. Free and open source.")
+            heading("Your voice stays on this Mac.", "Open Quill turns speech into text locally. Free and open source.")
             HStack(spacing: 10) {
                 promise("No account", "person.crop.circle.badge.xmark")
                 promise("No cloud transcription", "icloud.slash")
@@ -305,7 +305,7 @@ struct SetupGuide: View {
                 .font(.system(size: 56, weight: .light)).foregroundStyle(Color.flowAccent)
                 .frame(width: 110, height: 110).background(Color.flowSoft, in: Circle())
             heading(state.readyToDictate ? "You’re ready." : "Your setup, at your pace.",
-                    "Dictate into your app. Draft edits there can teach Open Whisper your words.")
+                    "Dictate into your app. Draft edits there can teach Open Quill your words.")
             VStack(alignment: .leading, spacing: 16) {
                 summary(state.modelReady ? "Speech model installed" : "Speech model still needed", ready: state.modelReady)
                 summary("Language: \(SpeechLanguages.name(state.preferences.language))\(state.preferences.model.supports(state.preferences.language) ? "" : " — choose Whisper")", ready: state.preferences.model.supports(state.preferences.language))

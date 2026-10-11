@@ -490,7 +490,7 @@ struct FlowSettingsView: View {
                     Button("Refresh", action: state.refreshPermissions)
                 }
                 if !state.accessibility {
-                    Text("Already enabled in macOS? Remove the old Open Whisper entry, add the current app again, enable it, then quit and reopen Open Whisper. The app checks actual access, not the saved switch.")
+                    Text("Already enabled in macOS? Remove the old Open Quill entry, add the current app again, enable it, then quit and reopen Open Quill. The app checks actual access, not the saved switch.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Toggle("Keep dictation history", isOn: $state.preferences.keepHistory)

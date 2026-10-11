@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 cd "${0:A:h:h}"
-app="$PWD/dist/Open Whisper.app/Contents/MacOS/OpenWhisper"
+app="$PWD/dist/Open Quill.app/Contents/MacOS/OpenQuill"
 [[ -x "$app" ]] || { print -u2 "Build the app first with ./scripts/build-app.sh"; exit 1; }
 mkdir -p .verification
 say -v Samantha -r 170 -o .verification/english.aiff "The meeting starts tomorrow at nine. Please send the report to my colleague."

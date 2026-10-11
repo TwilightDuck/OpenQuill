@@ -17,6 +17,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Reuse the existing certificate through product renames to preserve macOS grants.
 if [[ ! -f "$certificate" ]]; then
     [[ ! -f "$keychain" ]] || { print -u2 "Incomplete local signing setup in $signing_dir"; exit 1; }
     /usr/bin/openssl rand -hex 32 > "$password_file"
@@ -26,7 +27,7 @@ distinguished_name = identity
 x509_extensions = signing
 prompt = no
 [identity]
-CN = Open Whisper Local Development
+CN = Open Quill Local Development
 [signing]
 basicConstraints = critical,CA:false
 keyUsage = critical,digitalSignature

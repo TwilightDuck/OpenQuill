@@ -1,6 +1,6 @@
 # Open model and runtime credits
 
-Open Whisper uses free local inference software and models. No paid API is required.
+Open Quill uses free local inference software and models. No paid API is required.
 
 - **FluidAudio**, FluidInference contributors. Apache License 2.0. [Source and license](https://github.com/FluidInference/FluidAudio).
 - **Parakeet Ultra**, Moondream post-training of NVIDIA Parakeet TDT 0.6B v3; Core ML conversion by FluidInference. Model weights licensed under Creative Commons Attribution 4.0. [Original weights](https://huggingface.co/moondream/parakeet-ultra), [Core ML conversion](https://huggingface.co/FluidInference/parakeet-ultra-coreml), [NVIDIA base model and attribution](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), [CC BY 4.0 license](https://creativecommons.org/licenses/by/4.0/legalcode).

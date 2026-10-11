@@ -1,11 +1,11 @@
 #!/bin/zsh
 set -euo pipefail
 cd "${0:A:h:h}"
-swift build -c release --product OpenWhisper
+swift build -c release --product OpenQuill
 binary_dir=$(swift build -c release --show-bin-path)
 mkdir -p "$PWD/dist"
 stage=$(mktemp -d "$PWD/dist/.package-XXXXXX")
-destination="$PWD/dist/Open Whisper.app"
+destination="$PWD/dist/Open Quill.app"
 cleanup() {
     if [[ ! -d "$destination" && -d "$stage/previous.app" ]]; then
         if ! mv "$stage/previous.app" "$destination"; then
@@ -16,9 +16,9 @@ cleanup() {
     rm -rf "$stage"
 }
 trap cleanup EXIT
-app="$stage/Open Whisper.app"
+app="$stage/Open Quill.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp "$binary_dir/OpenWhisper" "$app/Contents/MacOS/OpenWhisper"
+cp "$binary_dir/OpenQuill" "$app/Contents/MacOS/OpenQuill"
 cp Resources/Info.plist "$app/Contents/Info.plist"
 # SwiftPM locates resource bundles next to the executable when distributed as a .app.
 for bundle in "$binary_dir"/*.bundle(N); do

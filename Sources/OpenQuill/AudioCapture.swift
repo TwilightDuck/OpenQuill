@@ -89,7 +89,7 @@ private final class AudioSink: NSObject, AVCaptureAudioDataOutputSampleBufferDel
 final class AudioCapture {
     private var session: AVCaptureSession?
     private var sink: AudioSink?
-    private let audioQueue = DispatchQueue(label: "OpenWhisper.microphone")
+    private let audioQueue = DispatchQueue(label: "OpenQuill.microphone")
     var status: (level: Float, activity: RecordingActivity) { sink?.status() ?? (0, RecordingActivity()) }
     var previewSamples: [Float] { sink?.previewSamples() ?? [] }
     func start(maximumSeconds: Double, thresholdDB: Double, deviceUID: String? = nil) throws {

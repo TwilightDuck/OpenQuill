@@ -1,4 +1,4 @@
-# Open Whisper Design Specification
+# Open Quill Design Specification
 
 Authored by Claude at the user's request on 10 October 2026, before onboarding implementation.
 
@@ -6,7 +6,7 @@ Implementation alignment: existing user choices and verified product behavior ta
 
 Readiness includes the chosen language and at least one working dictation shortcut. Completion lists both explicitly. Option-Space is registered exclusively so macOS can report a real conflict; unavailable registration is retried on the existing status refresh. Granted permissions show their status without another request action.
 
-Open Whisper is a quiet instrument. It shows up when you speak and gets out of the way when you don't. Every surface should feel calm, warm and exact: a warm neutral base, one teal accent, real system controls, and honest status.
+Open Quill is a quiet instrument. It shows up when you speak and gets out of the way when you don't. Every surface should feel calm, warm and exact: a warm neutral base, one teal accent, real system controls, and honest status.
 
 **Principles**
 - **Truth over reassurance.** Show the real permission, model and device state. Never imply a capability the system doesn't provide.
@@ -168,7 +168,7 @@ Onboarding takes over the main window's detail area, with the sidebar collapsed.
 
 - **Composition:** A rounded Mac outline drawn in `separator`. Inside it, a five-bar waveform settles into a line of text reading "Your words, typed where you are." A soft `accentSoft` circle behind the Mac suggests a boundary. It is drawn on appear; under Reduce Motion it appears static.
 - **Title:** "Your voice stays on this Mac."
-- **Body:** "Open Whisper turns speech into text locally. Free and open source."
+- **Body:** "Open Quill turns speech into text locally. Free and open source."
 - **Promise chips** (row of three `accentSoft` capsules with `accentText`):
   - "No account" (`person.crop.circle.badge.xmark`)
   - "No cloud transcription" (`icloud.slash`)
@@ -196,7 +196,7 @@ Onboarding takes over the main window's detail area, with the sidebar collapsed.
     - Untrusted: button "Allow Accessibility". The trust prompt is shown only on that click.
     - After the prompt: button "Open Accessibility Settings".
     - Trusted: "Allowed".
-- **Status checking:** Status is polled every second while the stage is visible and on app activation. A request button is never shown for an already-granted permission. If 15 s pass after returning from System Settings and Accessibility still reads untrusted, show the Caption "Already turned on? Quit and reopen Open Whisper." with a "Quit and Reopen" button.
+- **Status checking:** Status is polled every second while the stage is visible and on app activation. A request button is never shown for an already-granted permission. If 15 s pass after returning from System Settings and Accessibility still reads untrusted, show the Caption "Already turned on? Quit and reopen Open Quill." with a "Quit and Reopen" button.
 - **Readiness gate:** Primary "Continue" is enabled when both permissions are granted. Otherwise a tertiary "Continue without" advances, and the later stages show what's missing.
 
 ### Speech model
@@ -255,16 +255,16 @@ Onboarding takes over the main window's detail area, with the sidebar collapsed.
 **Completion** happens in place:
 - The scratch card settles into a compact summary of three `success` rows: "Speech model installed", "Microphone: Automatic", "Middle-click to dictate".
 - Title: "You're ready."
-- Body: "Dictate into any app. Edits you make there can teach Open Whisper your words."
+- Body: "Dictate into any app. Edits you make there can teach Open Quill your words."
 - Primary: "Start dictating", which opens Dictate.
 - Secondary link: "Review settings".
 
 ## Correction learning
 
-Learning happens in the destination app, not in Open Whisper.
+Learning happens in the destination app, not in Open Quill.
 
 **Observation**
-- After an insertion, Open Whisper watches only the focused element's AX value, around the inserted range, for 90 s.
+- After an insertion, Open Quill watches only the focused element's AX value, around the inserted range, for 90 s.
 - An edit is considered when it has been stable for 3 s.
 - It must be a substitution of at most 3 words and at most 32 characters on each side.
 - Secure fields are ignored.
@@ -281,7 +281,7 @@ Learning happens in the destination app, not in Open Whisper.
 **Support**
 - Settings → Apps lists each app as either "Learns from edits" or "Can't read edits in this app".
 - That status is determined from real AX readback, never assumed.
-- Copy: "Some apps don't share their text with macOS. Open Whisper won't track them, and it never records keystrokes."
+- Copy: "Some apps don't share their text with macOS. Open Quill won't track them, and it never records keystrokes."
 
 ## Per-app options
 

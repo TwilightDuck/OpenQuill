@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleName</key><string>Open Whisper</string>
-<key>CFBundleDisplayName</key><string>Open Whisper</string>
+<key>CFBundleName</key><string>Open Quill</string>
+<key>CFBundleDisplayName</key><string>Open Quill</string>
 <!-- Legacy identifier preserves existing permissions and preferences. -->
 <key>CFBundleIdentifier</key><string>be.nick.wisperflow</string>
-<key>CFBundleExecutable</key><string>OpenWhisper</string>
+<key>CFBundleExecutable</key><string>OpenQuill</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.6.0</string>
-<key>CFBundleVersion</key><string>10</string>
+<key>CFBundleShortVersionString</key><string>0.6.1</string>
+<key>CFBundleVersion</key><string>11</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
-<key>NSMicrophoneUsageDescription</key><string>Open Whisper records your voice only during dictation and transcribes it entirely on your Mac.</string>
+<key>NSMicrophoneUsageDescription</key><string>Open Quill records your voice only during dictation and transcribes it entirely on your Mac.</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSSupportsAutomaticTermination</key><false/>
 </dict></plist>

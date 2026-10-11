@@ -248,7 +248,7 @@ final class AppState {
         _ = AXIsProcessTrustedWithOptions(options)
         refreshPermissions()
         if !accessibility {
-            notice = "If Open Whisper is already enabled in Settings, remove its old entry with −, then add this copy with +: \(Bundle.main.bundleURL.path). Enable it and quit and reopen Open Whisper."
+            notice = "If Open Quill is already enabled in Settings, remove its old entry with −, then add this copy with +: \(Bundle.main.bundleURL.path). Enable it and quit and reopen Open Quill."
         }
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
     }
@@ -256,7 +256,7 @@ final class AppState {
         Task {
             let allowed = await AVCaptureDevice.requestAccess(for: .audio)
             microphoneStatus = Self.describeMicrophone()
-            notice = allowed ? "Microphone access is allowed." : "Allow Open Whisper under System Settings → Privacy & Security → Microphone."
+            notice = allowed ? "Microphone access is allowed." : "Allow Open Quill under System Settings → Privacy & Security → Microphone."
         }
     }
     func openMicrophoneSettings() {
@@ -394,7 +394,7 @@ final class AppState {
                 phase = .inserting
                 panel.show(title: "Inserting text", detail: target?.appName ?? "Saving transcript")
                 let delivery = await target?.insert(cleaned, allowPaste: preferences.clipboardFallback, pressEnter: pressEnter) ?? (status: "Saved — no target field", anchor: nil)
-                let record = Dictation(original: result.text, text: cleaned, appName: target?.appName ?? "Open Whisper",
+                let record = Dictation(original: result.text, text: cleaned, appName: target?.appName ?? "Open Quill",
                     bundleID: target?.bundleID ?? "", language: actualLanguage, audioSeconds: result.audioSeconds,
                     processingSeconds: processingSeconds, delivery: delivery.status)
                 if preferences.keepHistory {
@@ -534,7 +534,7 @@ final class AppState {
     func clearLearning() { watch = nil; data.corrections = []; persist() }
     func copy(_ text: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) }
     func exportHistory() {
-        let panel = NSSavePanel(); panel.nameFieldStringValue = "Open Whisper History.json"; panel.allowedContentTypes = [.json]
+        let panel = NSSavePanel(); panel.nameFieldStringValue = "Open Quill History.json"; panel.allowedContentTypes = [.json]
         if panel.runModal() == .OK, let url = panel.url {
             do { try JSONEncoder().encode(data.dictations).write(to: url, options: .atomic) } catch { notice = error.localizedDescription }
         }
