@@ -14,6 +14,23 @@ Middle-click, speak, then middle-click again to insert your text. **Option-Space
 - Per-app preferences, local history and speech statistics.
 - Microphone selection, audio muting, adjustable recording limits and quiet-pause stopping.
 
+## Screenshots
+
+![Open Quill’s Dictate screen with local model status and dictation shortcuts](docs/screenshots/dictate.jpg)
+
+<details>
+<summary>Browse setup and statistics</summary>
+
+**Setup**
+
+![Open Quill’s private, local-first onboarding welcome screen](docs/screenshots/setup.jpg)
+
+**Statistics**
+
+![Open Quill’s local dictation statistics and weekly activity chart](docs/screenshots/statistics.jpg)
+
+</details>
+
 ## Get started
 
 Build with **Xcode / Swift 6.2+**:
