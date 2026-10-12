@@ -99,7 +99,7 @@ struct DictateView: View {
                             Text(state.keyboardShortcutLabel).padding(.horizontal, 12).padding(.vertical, 8).background(.quaternary, in: Capsule())
                         }
                     }.font(.callout)
-                    if state.phase == .processing || state.phase == .cleaning || state.phase == .starting || state.phase == .cancelling { ProgressView().controlSize(.small) }
+                    if state.phase == .processing || state.phase == .cleaning || state.phase == .starting { ProgressView().controlSize(.small) }
                     if state.phase == .recording {
                         ProgressView(value: Double(state.level)).tint(Color.flowAccent).frame(width: 220)
                         if let remaining = state.silenceRemaining, remaining < 4.5 { Text("Finishing after silence in \(Int(ceil(remaining)))s").font(.caption).foregroundStyle(.secondary) }

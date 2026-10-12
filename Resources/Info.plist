@@ -7,8 +7,8 @@
 <key>CFBundleIdentifier</key><string>be.nick.wisperflow</string>
 <key>CFBundleExecutable</key><string>OpenQuill</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.6.4</string>
-<key>CFBundleVersion</key><string>14</string>
+<key>CFBundleShortVersionString</key><string>0.6.5</string>
+<key>CFBundleVersion</key><string>15</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>

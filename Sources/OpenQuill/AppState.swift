@@ -41,7 +41,7 @@ struct Preferences: Codable {
 }
 
 enum DictationPhase: Equatable {
-    case idle, starting, recording, processing, cleaning, inserting, cancelling
+    case idle, starting, recording, processing, cleaning, inserting
     var title: String {
         switch self {
         case .idle: "Ready to dictate"
@@ -50,7 +50,6 @@ enum DictationPhase: Equatable {
         case .processing: "Transcribing locally"
         case .cleaning: "Polishing locally"
         case .inserting: "Inserting text"
-        case .cancelling: "Cancelling"
         }
     }
 }
@@ -114,6 +113,7 @@ final class AppState {
     private var target: TextTarget?
     private var run: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
+    private var cancelledWork: Task<Void, Never>?
     private var timer: Timer?
     private var meterTimer: Timer?
     private var generation = UUID()
@@ -271,8 +271,10 @@ final class AppState {
         guard !modelBusy, phase == .idle else { return }
         modelBusy = true; modelReady = false; progress = 0
         let selected = preferences.model
+        let pendingWork = cancelledWork
         modelStatus = download ? "Downloading \(selected.title)…" : "Loading \(selected.title)…"
         do {
+            await pendingWork?.value
             try await engine.prepare(selected, download: download) { [weak self] value in
                 Task { @MainActor in self?.progress = value }
             }
@@ -320,7 +322,8 @@ final class AppState {
         let session = UUID(); generation = session
         run = Task { [self] in
             let permitted = await AVCaptureDevice.requestAccess(for: .audio)
-            guard generation == session, !Task.isCancelled else { phase = .idle; return }
+            guard generation == session else { return }
+            guard !Task.isCancelled else { phase = .idle; return }
             guard permitted else { phase = .idle; notice = "Allow microphone access in System Settings → Privacy & Security → Microphone."; return }
             // On first permission prompt the user may have selected another app.
             guard target == nil || target?.stillFocused == true else { phase = .idle; notice = "Select your text field and click the middle button again."; return }
@@ -334,7 +337,7 @@ final class AppState {
                 RunLoop.main.add(meterTimer, forMode: .common); self.meterTimer = meterTimer
                 if preferences.livePreview ?? true { startPreview(session: session) }
                 if finishAfterStart { finish() }
-            } catch { phase = .idle; notice = error.localizedDescription }
+            } catch { if generation == session { phase = .idle; notice = error.localizedDescription } }
         }
     }
 
@@ -343,9 +346,7 @@ final class AppState {
         meterTimer?.invalidate(); meterTimer = nil
         let samples: [Float]
         do { samples = try capture.stop() } catch {
-            let pending = previewTask; pending?.cancel(); previewTask = nil
-            liveTranscript = ""; panel.hide(); notice = error.localizedDescription; phase = .cancelling
-            run = Task { await pending?.value; phase = .idle }
+            cancel(); notice = error.localizedDescription
             return
         }
         phase = .processing
@@ -363,9 +364,11 @@ final class AppState {
         let snippets = recordingSnippets
         let hints = data.corrections.filter { $0.enabled && ($0.bundleID == "*" || $0.bundleID == target?.bundleID) && ($0.language == "*" || $0.language == language) }.map(\.to)
         let vocabulary = ([preferences.vocabulary] + hints).joined(separator: ", ")
+        let pendingWork = cancelledWork
         run = Task {
-            defer { phase = .idle; panel.hide() }
+            defer { if generation == session { phase = .idle; panel.hide() } }
             do {
+                await pendingWork?.value
                 await pendingPreview?.value
                 guard generation == session, !Task.isCancelled else { return }
                 let result = try await engine.transcribe(samples, language: language, vocabulary: vocabulary)
@@ -422,20 +425,25 @@ final class AppState {
 
     func cancel() {
         guard phase != .idle, phase != .inserting else { return }
-        generation = UUID(); run?.cancel()
+        generation = UUID()
+        let pendingRun = run, pendingPreview = previewTask, pendingWork = cancelledWork
+        pendingRun?.cancel(); pendingPreview?.cancel()
+        run = nil; previewTask = nil
         if phase == .recording {
-            meterTimer?.invalidate(); meterTimer = nil; capture.cancel(); panel.hide(); liveTranscript = ""
-            let pending = previewTask; pending?.cancel(); previewTask = nil; phase = .cancelling
-            run = Task { await pending?.value; phase = .idle }
+            meterTimer?.invalidate(); meterTimer = nil; capture.cancel()
         }
-        else { phase = .cancelling }
+        // Core ML may finish an in-flight operation; keep the next decode behind it, without blocking capture or UI.
+        cancelledWork = Task { await pendingWork?.value; await pendingRun?.value; await pendingPreview?.value }
+        liveTranscript = ""; panel.hide(); phase = .idle
     }
 
     private func startPreview(session: UUID) {
         let language = recordingLanguage
         let vocabulary = preferences.vocabulary
+        let pendingWork = cancelledWork
         previewTask = Task { [weak self] in
             guard let self else { return }
+            await pendingWork?.value
             while !Task.isCancelled {
                 do {
                     try await Task.sleep(for: .seconds(2))
@@ -548,18 +556,23 @@ final class AppState {
         let dialog = NSOpenPanel(); dialog.allowedContentTypes = [.audio]; dialog.allowsMultipleSelection = false
         guard dialog.runModal() == .OK, let url = dialog.url else { return }
         phase = .processing
+        let session = UUID(); generation = session
+        let language = preferences.language
+        let pendingWork = cancelledWork
         run = Task {
-            defer { phase = .idle }
+            defer { if generation == session { phase = .idle } }
             do {
-                let result = try await engine.transcribeFile(url, language: preferences.language)
-                guard !Task.isCancelled else { return }
+                await pendingWork?.value
+                guard generation == session, !Task.isCancelled else { return }
+                let result = try await engine.transcribeFile(url, language: language)
+                guard generation == session, !Task.isCancelled else { return }
                 lastText = result.text
                 if preferences.keepHistory {
                     data.dictations.insert(Dictation(original: result.text, text: result.text, appName: "Audio import", bundleID: "import",
                         language: result.language, audioSeconds: result.audioSeconds, processingSeconds: result.processingSeconds, delivery: "Imported — use Copy"), at: 0)
                     data.dictations = Array(data.dictations.prefix(1000)); persist()
                 }
-            } catch { if !Task.isCancelled { notice = error.localizedDescription } }
+            } catch { if generation == session, !Task.isCancelled { notice = error.localizedDescription } }
         }
     }
     func showWindow() {

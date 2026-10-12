@@ -90,6 +90,7 @@ actor SpeechEngine {
     }
 
     func transcribe(_ samples: [Float], language: String, vocabulary: String = "") async throws -> SpeechOutput {
+        try Task.checkCancellation()
         guard let loaded else { throw FlowError.message("Load a speech model in Settings first.") }
         guard loaded.supports(language) else { throw FlowError.message("\(loaded.title) doesn’t support \(SpeechLanguages.name(language)). Choose Whisper in Settings for this language.") }
         guard samples.count >= 8000 else { throw FlowError.message("The recording was too short. Try speaking for at least half a second.") }
@@ -112,11 +113,13 @@ actor SpeechEngine {
             text = results.map(\.text).joined(separator: " ")
             detected = language == "auto" ? SpeechLanguages.detectedCode(results.first?.language) : language
         } else { throw FlowError.message("The model is unavailable.") }
+        try Task.checkCancellation()
         return SpeechOutput(text: text.trimmingCharacters(in: .whitespacesAndNewlines), language: detected,
             audioSeconds: Double(samples.count) / 16000, processingSeconds: Date().timeIntervalSince(started))
     }
 
     func transcribeFile(_ url: URL, language: String) async throws -> SpeechOutput {
+        try Task.checkCancellation()
         let samples = try AudioConverter().resampleAudioFile(url)
         return try await transcribe(samples, language: language)
     }

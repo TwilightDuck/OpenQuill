@@ -70,6 +70,8 @@ Learning personal vocabulary uses local replacement rules and recognition hints.
 
 ## Recording feedback and silence stopping
 
+**Cancel** or **Escape** dismisses recording/transcription immediately and discards that dictation. An in-flight Core ML operation may finish in the background; the next recording can start immediately, while its decoding waits for the old work to drain. Cancelled results and cleanup cannot insert text or overwrite a newer session. Cancellation is disabled once text insertion begins, to let that edit finish safely.
+
 **Settings → Dictation → Input device** offers Automatic (your Mac’s system input) and the available microphones. A specific device is remembered by its persistent UID and applies to the next recording without changing the system-wide input. If it disconnects, recording reports the unavailable device instead of silently switching microphones. Use Refresh after connecting a device, or choose Automatic.
 
 **Settings → Dictation → Mute audio while recording** is off by default. When enabled, it temporarily mutes the Mac’s default audio output and system alert output during dictation and setup practice, following output-device changes. Finishing, quiet-pause/time-limit stopping, cancellation, a start failure and normal app termination restore outputs the recording muted before transcription, without changing playback volume or unmuting an already-muted output. An explicit unmute is respected. Devices must expose macOS software mute; an unsupported output reports an error instead of recording with audio playing. Apps routed directly to a different output are outside the default routes. Force-quitting or a process crash cannot run restoration; an output disconnected before restoration may need its own mute control after reconnecting.
@@ -109,6 +111,7 @@ swift test
 ./scripts/verify-offline.sh
 ./scripts/verify-signing.sh
 ./scripts/verify-recording-mute.sh
+./scripts/verify-cancellation.sh
 ```
 
 The first command also checks snippet upgrade/persistence, literal multiline expansion, overlapping/disabled triggers, non-cascading replacements and protected cleanup fallback. It checks the local correction/persistence feature flow, context isolation, Unicode, conflicting substitutions, global taught-name precedence, quiet-pause timing/toggle behavior and 1/3/10/30-minute limits, speech-profile accounting including Japanese/Chinese/Thai word boundaries, literal spacing in name corrections, and punctuation-only edits. The second performs real model inference on generated English, Belgian Dutch, French, German and Spanish speech while macOS denies network access to the executable. It requires the Parakeet model to have been downloaded and the macOS Samantha, Ellen, Thomas, Anna and Mónica voices to be available. Synthetic speech is a pipeline check, not a measure of microphone quality or the user's accent.
