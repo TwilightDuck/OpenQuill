@@ -23,6 +23,19 @@ When upgrading from an older ad-hoc build, macOS can show an enabled Accessibili
 
 Select a text field in another app, click the **middle mouse button** once, speak, and click again to finish. **Option-Space** is the default keyboard alternative. Change it in **Settings → Dictation → Keyboard shortcut → Record shortcut**: press a combination that includes Command, Option or Control. Escape cancels capture; Reset restores Option-Space. Choose press-to-toggle or hold-to-talk in Keyboard behavior. The middle button always toggles independently. **Escape** cancels recording or transcription. Once text insertion begins it completes as one edit. Middle-button clicks are consumed while the trigger is enabled; disable that trigger in Settings to restore ordinary middle-click behavior. The app stays in the menu bar when its window closes.
 
+## Package a preview release
+
+```sh
+./scripts/build-app.sh
+./scripts/package-release.sh
+```
+
+The package script produces a native Installer `.pkg`, a drag-to-Applications `.dmg`, and `SHA256SUMS.txt` under `dist/releases/v<app version>/`. It requires an arm64 build, verifies the app signature and DMG checksum, and compares the expanded installer payload with the staged app. It refuses to overwrite an existing release directory. Only the app and license files are packaged; models, preferences, history and the private signing keychain stay outside the downloads.
+
+The installer targets `/Applications/Open Quill.app`, requires Apple silicon and macOS 14+, and disables bundle relocation so installation cannot replace the developer checkout. Quit the app before upgrading. Existing models and personal data are preserved, though a new downloaded signing identity can require renewed macOS permissions.
+
+Publish these builds as GitHub **prereleases** with a clear warning: the installer is unsigned and the app is locally signed, not Apple-notarized. Gatekeeper rejection is expected; do not disable Gatekeeper or strip quarantine to conceal it. Link [Apple’s approval guidance](https://support.apple.com/en-us/102445). A Developer ID identity and notarization are needed for a trusted public download.
+
 ## Choose a local model
 
 | Model | Intended use | Approximate download |

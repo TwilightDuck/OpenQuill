@@ -31,18 +31,13 @@ Middle-click, speak, then middle-click again to insert your text. **Option-Space
 
 </details>
 
-## Get started
+## Download
 
-Build with **Xcode / Swift 6.2+**:
+[Install Open Quill (.pkg)](https://github.com/TwilightDuck/OpenQuill/releases/download/v0.6.3/Open-Quill-0.6.3-macOS-arm64.pkg) · [Drag-to-Applications (.dmg)](https://github.com/TwilightDuck/OpenQuill/releases/download/v0.6.3/Open-Quill-0.6.3-macOS-arm64.dmg)
 
-```sh
-./scripts/build-app.sh
-open "dist/Open Quill.app"
-```
+**Preview:** the installer is unsigned and the app is not Apple-notarized. macOS may block opening these downloads; follow [Apple’s approval instructions](https://support.apple.com/en-us/102445). Quit Open Quill before installing an update.
 
 Setup guides you through permissions, a free model download and a private practice field. Start with **Parakeet Ultra** for fast dictation in 25 languages, including English and Dutch / Flemish. Choose **Whisper** for its 100-language catalog. Accuracy varies by language and accent.
-
-This is an early source release; a notarized download is not yet available.
 
 ## Private by default
 
