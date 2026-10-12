@@ -33,7 +33,7 @@ Middle-click, speak, then middle-click again to insert your text. **Option-Space
 
 ## Download
 
-[Install Open Quill (.pkg)](https://github.com/TwilightDuck/OpenQuill/releases/download/v0.6.3/Open-Quill-0.6.3-macOS-arm64.pkg) · [Drag-to-Applications (.dmg)](https://github.com/TwilightDuck/OpenQuill/releases/download/v0.6.3/Open-Quill-0.6.3-macOS-arm64.dmg)
+[Install Open Quill (.pkg)](https://github.com/TwilightDuck/OpenQuill/releases/download/v0.6.4/Open-Quill-0.6.4-macOS-arm64.pkg) · [Drag-to-Applications (.dmg)](https://github.com/TwilightDuck/OpenQuill/releases/download/v0.6.4/Open-Quill-0.6.4-macOS-arm64.dmg)
 
 **Preview:** the installer is unsigned and the app is not Apple-notarized. macOS may block opening these downloads; follow [Apple’s approval instructions](https://support.apple.com/en-us/102445). Quit Open Quill before installing an update.
 

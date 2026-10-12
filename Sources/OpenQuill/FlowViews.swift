@@ -397,6 +397,8 @@ struct FlowSettingsView: View {
     var body: some View {
         Form {
             Section("General") {
+                Toggle("Show in Dock", isOn: Binding(get: { state.preferences.showInDock ?? true }, set: { state.preferences.showInDock = $0 }))
+                Text("Turn off to keep Open Quill in the menu bar only. Use its menu bar icon → Show Open Quill to reopen this window.").font(.caption).foregroundStyle(.secondary)
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Setup guide").font(.headline)

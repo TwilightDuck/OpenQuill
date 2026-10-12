@@ -13,6 +13,8 @@ open "dist/Open Quill.app"
 
 First launch opens a five-step setup: privacy, permissions, speech model, microphone and shortcuts, then a private practice field. You can skip it and reopen it from **Settings → Setup guide** or **Help → Show Setup Guide**. Practice text stays in memory and never enters another app, submits a message, or contributes to history and statistics. Existing users keep their setup and preferences. The visual specification, requested from Claude before implementation, is in [design specification](DESIGN.md).
 
+**Settings → General → Show in Dock** controls Dock and app-switcher visibility. It is on by default for existing and new installations, changes immediately and is remembered after relaunch. Turn it off for menu-bar-only operation; the menu bar icon’s **Show Open Quill** command still opens the window, and closing the window keeps dictation running.
+
 Download **Parakeet Ultra** during setup or in Settings. If the files are already present, the app loads them locally on launch. Allow **Microphone** when macOS asks, and enable the app under **System Settings → Privacy & Security → Accessibility**. Refresh permissions in the app. Already allowed microphone access shows its status without another request button. Denied access offers a link to macOS privacy settings. macOS owns these permissions; the app cannot grant them itself. Some systems may also require Input Monitoring for the mouse trigger.
 
 Local builds use a persistent self-signed development identity stored in an owner-only, separate keychain under `~/Library/Application Support/WisperFlowBuildSigning/`. The keychain password is generated locally and kept in an owner-only file in that folder. Its certificate is pinned in the app's designated requirement, so an ordinary rebuild retains the same identity. The build does not change certificate trust settings or use your login keychain. Keep this signing folder private and retain it between builds. Models and history remain in Application Support.
@@ -127,6 +129,8 @@ The executable also supports local file transcription and explicitly requested d
 No flag performs an upload. Without `--download-model`, model loading and transcription use local files and fail locally if assets are missing. The app is signed with a local development certificate; it is not notarized for public distribution.
 
 ## Live acceptance checks
+
+- Change **Settings → General → Show in Dock** and run `swift scripts/verify-dock-visibility.swift shown` or `hidden` for that state. Relaunch and repeat, then close the window and reopen it from the menu bar. The script checks the persisted preference against the running app’s native activation policy; also confirm the menu bar icon remains available in both modes.
 
 - Start/stop with a physical middle button and Option-Space; Escape discards a recording.
 - Dictate English and Flemish in Notes, a browser field and your everyday editor; measure time from stop to insertion.

@@ -37,6 +37,7 @@ struct Preferences: Codable {
     var livePreview: Bool?
     var localCleanup: Bool?
     var muteWhileRecording: Bool?
+    var showInDock: Bool?
 }
 
 enum DictationPhase: Equatable {
@@ -59,6 +60,7 @@ final class AppState {
     var preferences: Preferences {
         didSet {
             if let data = try? JSONEncoder().encode(preferences) { UserDefaults.standard.set(data, forKey: "preferences") }
+            FlowAppDelegate.updateDockVisibility(preferences.showInDock ?? true)
             triggers.middleEnabled = preferences.middleMouse
             triggers.useShortcut(preferences.keyboardShortcut ?? DictationShortcut())
             triggers.holdToTalk = preferences.keyboardHoldToTalk ?? false

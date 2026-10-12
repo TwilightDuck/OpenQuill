@@ -7,10 +7,11 @@
 <key>CFBundleIdentifier</key><string>be.nick.wisperflow</string>
 <key>CFBundleExecutable</key><string>OpenQuill</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.6.3</string>
-<key>CFBundleVersion</key><string>13</string>
+<key>CFBundleShortVersionString</key><string>0.6.4</string>
+<key>CFBundleVersion</key><string>14</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>LSUIElement</key><true/>
 <key>NSMicrophoneUsageDescription</key><string>Open Quill records your voice only during dictation and transcribes it entirely on your Mac.</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSSupportsAutomaticTermination</key><false/>

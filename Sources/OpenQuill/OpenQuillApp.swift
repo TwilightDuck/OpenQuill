@@ -37,6 +37,17 @@ enum OpenQuillEntry {
 
 @MainActor
 final class FlowAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let data = UserDefaults.standard.data(forKey: "preferences")
+        let preferences = data.flatMap { try? JSONDecoder().decode(Preferences.self, from: $0) }
+        Self.updateDockVisibility(preferences?.showInDock ?? true)
+    }
+
+    static func updateDockVisibility(_ visible: Bool) {
+        let policy: NSApplication.ActivationPolicy = visible ? .regular : .accessory
+        if NSApp.activationPolicy() != policy { NSApp.setActivationPolicy(policy) }
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 
